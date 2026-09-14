@@ -383,8 +383,12 @@ References
 * RFE: https://bugs.launchpad.net/neutron/+bug/2165306
 * Drivers discussion:
   https://meetings.opendev.org/meetings/neutron_drivers/2026/neutron_drivers.2026-09-11-13.00.log.html
-* OVN Northbound database:
+* OVN ACL sampling configuration (ACL, Sample, Sample_Collector, Sampling_App):
   https://www.ovn.org/support/dist-docs/ovn-nb.5.html
-* OVS database and flow-based IPFIX:
+* OVN logical flows for ACL sampling:
+  https://docs.ovn.org/en/latest/ref/ovn-logical-flows.7.html
+* OVN sample action and observation identifiers:
+  https://www.ovn.org/support/dist-docs/ovn-sb.5.html
+* Host IPFIX exporter configuration (OVS IPFIX and Flow_Sample_Collector_Set):
   https://www.openvswitch.org/support/dist-docs/ovs-vswitchd.conf.db.5.html
 * Related flow-log RFE: https://bugs.launchpad.net/neutron/+bug/2071323

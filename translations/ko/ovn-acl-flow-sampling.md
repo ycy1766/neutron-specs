@@ -1,7 +1,7 @@
 # Network Log의 OVN ACL flow sampling
 
 이 문서는 [영문 spec](../../specs/2027.1/ovn-acl-flow-sampling.rst)을 검토하기 위한
-한글 번역본이다. 기준은 `7ee78e9` 커밋의 영문 초안이며, 설계 변경 시 영문과 함께
+한글 번역본이다. 같은 브랜치의 영문 초안을 기준으로 하며, 설계 변경 시 영문과 함께
 갱신한다. 초안의 제안 사항을 설명하는 문서로, 세부 설계가 upstream에서 확정되었다는
 뜻은 아니다.
 
@@ -334,8 +334,12 @@ Logging guide는 명시적 활성화 설정, 지원하는 OVN/OVS 조합, 소유
 - RFE: <https://bugs.launchpad.net/neutron/+bug/2165306>
 - Drivers 논의:
   <https://meetings.opendev.org/meetings/neutron_drivers/2026/neutron_drivers.2026-09-11-13.00.log.html>
-- OVN Northbound 데이터베이스:
+- OVN ACL sampling 설정 (ACL, Sample, Sample_Collector, Sampling_App):
   <https://www.ovn.org/support/dist-docs/ovn-nb.5.html>
-- OVS 데이터베이스와 flow-based IPFIX:
+- OVN ACL sampling의 logical flow:
+  <https://docs.ovn.org/en/latest/ref/ovn-logical-flows.7.html>
+- OVN sample action과 관찰 식별자:
+  <https://www.ovn.org/support/dist-docs/ovn-sb.5.html>
+- 호스트 IPFIX exporter 설정 (OVS IPFIX와 Flow_Sample_Collector_Set):
   <https://www.openvswitch.org/support/dist-docs/ovs-vswitchd.conf.db.5.html>
 - 관련 flow-log RFE: <https://bugs.launchpad.net/neutron/+bug/2071323>
