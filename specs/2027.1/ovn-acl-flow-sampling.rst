@@ -23,10 +23,9 @@ Problem Description
 OVN supports sampling packets that match an ACL, including traffic belonging
 to established connections. An operator can attach this configuration directly
 to the OVN Northbound database, but Neutron does not maintain it. For example,
-changing a security group's statefulness recreates its rule ACLs. Sampling
-references attached to the old ACLs do not describe the replacement ACLs.
-Deleting or disabling a Network Log also leaves manually managed sampling
-outside the Log's lifecycle.
+changing a security group's statefulness recreates its rule ACLs and loses
+their sampling references. Deleting or disabling a Network Log does not
+remove sampling configured manually on its ACLs.
 
 Network Log already records which security group and events an operator wants
 to observe. Extending that resource allows the OVN driver to maintain sampling
@@ -47,9 +46,9 @@ Network Log API
 ---------------
 
 A new ``logging-output-type`` extension will add ``output_type`` to the Log
-resource. Its values will be ``packet_log`` and ``flow_sample``. The default
-will be ``packet_log``, including for existing Logs. This value retains the
-current logging path for the configured backend.
+resource, with values ``packet_log`` and ``flow_sample``. The default,
+``packet_log``, preserves the backend's current logging behavior for existing
+Logs and requests that omit the field.
 
 The attribute will be accepted on create and returned by show and list. It
 will support equality filtering and will not be mutable. A caller that needs
@@ -87,8 +86,7 @@ Initial scope and policy
 
 An OVN security-group ACL applies to a Port Group. Looking up the security
 groups attached to a target port does not restrict those ACLs to that port.
-In addition, a shared security group can contain ports from several projects.
-These properties constrain the observation scope of the first implementation.
+A shared security group can also contain ports from several projects.
 
 For ``flow_sample``, the request will require ``resource_type=security_group``
 and an explicit ``resource_id``. A non-null ``target_id`` or an omitted
@@ -99,18 +97,15 @@ default-drop architecture to implement a narrower selector.
 
 The existing Network Log policy permits administrators and project managers.
 The new output will additionally require an administrative policy check on
-creation and on re-enabling a flow-sample Log. This restriction allows the
-initial implementation to observe a shared SG without presenting that scope
-as a project-isolated operation. Packet-log permissions will retain their
+creation and on re-enabling a flow-sample Log, since sampling a shared SG can
+include another project's traffic. Packet-log permissions will retain their
 existing defaults. Existing Log read, disable, and delete policy checks will
 continue to apply; these operations will not require sampling to be enabled
 in the deployment.
 
-This is a narrower initial scope than the full set of Network Log selectors.
-Supporting project-manager requests and individual ports would require a
-separate design for maintaining the observation boundary when SG membership
-or sharing changes. Checking the SG's project only when the Log is created
-would not be sufficient.
+Supporting project-manager requests or individual ports later will require
+keeping sampling within the requested scope as SG membership and sharing
+change. Checking the SG's project only when the Log is created is insufficient.
 
 Deployment requirements and capability
 --------------------------------------
@@ -144,8 +139,8 @@ Requests for an unsupported output will fail with HTTP 400. Validation will
 also apply to Logs created with ``enabled=false`` and will run again before
 re-enabling a Log. A detected ownership or identifier conflict in the
 Northbound database will be reported as HTTP 409. A database connection failure
-will follow the logging service's driver-error handling; it is not evidence
-that the requested output is permanently unsupported.
+will follow the logging service's driver-error handling rather than being
+reported as an unsupported output.
 
 Capability discovery will not report exporter or collector health. Operators
 will configure OVS ``Flow_Sample_Collector_Set`` and the associated exporter
@@ -196,10 +191,10 @@ Sample.
 Sample has no ``external_ids`` column. Ownership therefore cannot be recorded
 on that row. Neutron will record attachment ownership and the expected
 reference on the ACL, and validate the referenced Sample's metadata and
-collector before changing or removing it. A foreign reference or a mismatch
-between the ownership record and actual reference will be a conflict, not an
-invitation to overwrite the row. Checks and updates must be in the same IDL
-transaction, with retry on concurrent changes.
+collector before changing or removing it. If the reference is foreign or
+differs from the ownership record, Neutron will report a conflict and leave
+it unchanged. Checks and updates must be in the same IDL transaction, with
+retry on concurrent changes.
 
 ACL selection and overlapping Logs
 ----------------------------------
@@ -279,11 +274,11 @@ miss failed cleanup after deletion. Log resources are not already covered
 by OVN's resource-revision maintenance, so this reconciliation must be added
 explicitly.
 
-After conflicting or concurrent changes, reconciliation will reread current
-Log intent and retry conditional Northbound updates. It will not apply an
-old Log snapshot indefinitely. Reconnection and maintenance leadership
-changes will trigger reevaluation of the stored intent. Ownership conflicts
-will be logged with the affected resource and left for the operator to resolve.
+After a conflict or concurrent change, reconciliation will reread the current
+Logs before retrying conditional Northbound updates. It will also reevaluate
+the stored state after reconnection or a change of maintenance leader.
+Ownership conflicts will be logged with the affected resource for the
+operator to resolve.
 
 Database synchronization will restore sampling on recreated SG-rule ACLs.
 SG-specific logging drop ACLs must also be reconciled explicitly; the current
@@ -330,11 +325,16 @@ and reports an existing foreign owner as a deployment conflict.
 Implementation
 ==============
 
-The work will add the neutron-lib extension, the Log migration and object
-changes, output validation and dispatch, and the OVN driver and recovery
-paths. Any ovsdbapp command needed for conditional attachment management will
-be developed with its transaction tests. Dataplane compatibility, particularly
-ACL-label coexistence, must be established before advertising the feature.
+The implementation consists of:
+
+* The neutron-lib API extension and Log database and object changes.
+* Output validation and dispatch in the logging service.
+* Sampling resource and ACL attachment management in the OVN logging driver.
+* Maintenance and database synchronization support for restoring sampling.
+
+Any ovsdbapp command needed for conditional attachment management will include
+transaction tests. Dataplane compatibility, particularly ACL-label coexistence,
+must be established before advertising the feature.
 
 The existing ``openstack network log`` commands are provided by the
 python-neutronclient OSC plugin. Create will gain ``--output-type``; show,
