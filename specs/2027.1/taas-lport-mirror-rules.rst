@@ -82,6 +82,39 @@ tap mirror에 ``rules`` 하위 리소스를 추가한다::
 새로 만든다. 이렇게 하면 OVN 행과 1:1 대응이 유지되고, 이미 데이터플레인에
 적용된 규칙을 부분 수정하는 일을 피할 수 있다.
 
+미러 타입별 속성
+----------------
+
+RFE 리뷰에서 ``tap_mirrors``\ 에 일부 미러 타입에서만 유효한 속성이 생긴다는
+점이 지적됐다 [1]_. API는 이를 명시적으로 드러내고, 적용되지 않는 속성은
+무시하지 않고 거부한다.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 33 33
+
+   * - 속성
+     - ``gre`` / ``erspanv1``
+     - ``lport``
+   * - ``port_id``
+     - 필수
+     - 필수
+   * - ``remote_ip``
+     - 필수
+     - 거부(``400``)
+   * - ``directions`` 터널 ID
+     - 필수, 방향마다 하나
+     - ``null``\ 이어야 함
+   * - ``remote_port_id``
+     - 거부(``400``)
+     - 필수
+   * - ``rules`` 하위 리소스
+     - 거부(``400``)
+     - 지원
+
+지금 lport 구현은 lport 미러에 준 ``remote_ip``\ 나 터널 ID를 무시한다. 쓰이지
+않는 값을 쓰인다고 오해하지 않도록 거부하게 바꾼다. 문서에도 같은 표를 둔다.
+
 규칙 속성
 ---------
 
@@ -235,8 +268,12 @@ service/tap flow(ML2/OVS)와 tap mirror(ML2/OVN)를 섞고 있다는 점이다 [
    규칙** (AWS 모델). 더 유연하지만 더 복잡하다. OVN ``Mirror_Rule`` 행은
    ``Mirror`` 하나에 속하므로 공유는 행 복사로 흉내 내야 한다.
 
-제안은 1안이다. TaaS API 전체 정리(tap service·tap flow 대 tap mirror)는
-할 가치가 있지만 이 spec과는 별개이며, 예를 들어 PTG에서 따로 논의할 수 있다.
+제안은 1안이다. tap mirror 대신 tap service와 tap flow 리소스를 재사용하자는
+안은 RFE 2168007에서 제안됐고, 드라이버 회의에서 tap mirror를 유지하기로 했다.
+OVN 드라이버는 tap mirror만 구현하고, OVN ``Mirror``\ 가 tap mirror와 1:1로
+대응하기 때문이다. TaaS API 전체 정리(ML2/OVS용 tap service·tap flow 대
+ML2/OVN용 tap mirror)는 할 가치가 있지만 이 spec과는 별개이며 별도 RFE로
+제안해야 한다.
 
 기본 거부(default deny)
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -259,15 +296,25 @@ service/tap flow(ML2/OVS)와 tap mirror(ML2/OVN)를 섞고 있다는 점이다 [
 테스트
 ------
 
-* 단위 테스트: API 정의, 플러그인 검증(미러 타입, 방향, 우선순위 충돌),
-  OVN match 변환, OVN 드라이버 호출, DB.
-* ovsdbapp의 ``mirror_rule_add/del`` functional 테스트(``Mirror_Rule``\ 이 없는
-  스키마에서는 skip), [2]_에 포함.
+* 단위 테스트: API 정의, 플러그인 검증, OVN match 변환(모든 속성 조합과 잘못된
+  조합), OVN 드라이버 호출, DB 마이그레이션과 연쇄 삭제, ``Mirror_Rule``\ 이
+  없는 Northbound 스키마(규칙 생성은 깔끔하게 실패하고 lport 미러는 동작).
+* ovsdbapp의 ``mirror_rule_add/del`` functional 테스트. 실제 OVN Northbound
+  스키마에서 돌고 ``Mirror_Rule``\ 이 없으면 skip한다. [2]_\ 에 포함.
 * ``neutron-tempest-plugin-tap-as-a-service-ovn`` 잡은 지금 lport 미러가
-  없는 OVN ``branch-24.03``\ 을 빌드한다. OVN 25.09 이상을 쓰는 잡 변형을
-  추가해, 새 tempest API 테스트(생성, 목록, 조회, 삭제, 거부 케이스)와
-  수집기에서 ``tcpdump``\ 로 skip된 흐름은 복제되지 않고 mirror된 흐름은
-  복제되는지 확인하는 시나리오 테스트를 돌린다.
+  없는 OVN ``branch-24.03``\ 을 빌드한다. OVN 25.09 이상 잡 변형을 추가해
+  다음을 돌린다.
+
+  * API 테스트: 규칙 생성·목록·조회·삭제, 거부 케이스(gre 미러의 규칙,
+    priority 0, 미러가 복제하지 않는 방향, L4 프로토콜 없는 포트 범위, 같은
+    규칙), tap mirror 삭제 시 규칙 삭제, 위 표의 속성 검사.
+  * 수집 VM에서 ``tcpdump``\ 로 보는 시나리오 테스트: ``skip`` 규칙이 흐름을
+    수집기에서 빼고, 더 높은 우선순위 ``mirror`` 규칙이 되돌리며, ``IN`` 전용
+    규칙은 나가는 트래픽에 영향을 주지 않는다.
+
+TaaS에는 지금 functional 테스트 스위트가 없어서 OVN 백엔드는 위 tempest 잡이
+end-to-end로 검증한다. 리뷰어가 원하면 neutron OVN functional 기반 위에 OVN
+드라이버용 작은 functional 스위트를 추가할 수 있다.
 
 
 문서 영향
