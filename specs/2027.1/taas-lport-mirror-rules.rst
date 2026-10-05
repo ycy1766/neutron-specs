@@ -81,6 +81,29 @@ Rules are immutable: to change a rule, delete it and create a new one. This
 keeps the mapping to OVN rows one-to-one and avoids partial updates of a
 rule that is already applied on the dataplane.
 
+Attributes by mirror type
+-------------------------
+
+At the RFE review it was pointed out that ``tap_mirrors`` now has attributes
+that are only valid for some mirror types [1]_. The API makes this explicit
+and rejects an attribute that does not apply, instead of ignoring it:
+
+==========================  =======================  ======================
+Attribute                   ``gre`` / ``erspanv1``   ``lport``
+==========================  =======================  ======================
+``port_id``                 required                 required
+``remote_ip``               required                 rejected (``400``)
+``directions`` tunnel ids   required, one per        must be ``null``
+                            direction
+``remote_port_id``          rejected (``400``)       required
+``rules`` sub-resource      rejected (``400``)       supported
+==========================  =======================  ======================
+
+Today the lport implementation ignores a ``remote_ip`` or tunnel id given
+for an lport mirror; it will be changed to reject them, so that a user can
+not believe a value is used when it is not. The documentation will carry the
+same table.
+
 Rule attributes
 ---------------
 
@@ -227,9 +250,13 @@ tunnel ids for ``gre``/``erspanv1``, ``remote_port_id`` and rules for
    OVN ``Mirror_Rule`` rows belong to one ``Mirror``, so sharing would be
    emulated by copying rows.
 
-The proposal is option 1. A cleanup of the overall TaaS API (tap services
-and tap flows versus tap mirrors) is worth doing but is independent of this
-spec and can be discussed separately, for example at the PTG.
+The proposal is option 1. Reusing the tap service and tap flow resources
+instead of tap mirrors was suggested on RFE 2168007; keeping tap mirrors was
+agreed at the drivers meeting, because the OVN driver only implements tap
+mirrors and an OVN ``Mirror`` maps one-to-one to a tap mirror. A cleanup of the overall TaaS
+API (tap services and tap flows for ML2/OVS versus tap mirrors for ML2/OVN)
+is worth doing but is independent of this spec and should be proposed in a
+separate RFE.
 
 Default deny
 ~~~~~~~~~~~~
@@ -253,16 +280,30 @@ rule calls; existing mirrors are not affected.
 Testing
 -------
 
-* Unit tests: API definition, plugin validation (mirror type, direction,
-  priority conflict), translation to OVN match, OVN driver calls, DB.
-* Functional tests in ovsdbapp for ``mirror_rule_add/del`` (skipped on a
-  schema without ``Mirror_Rule``), part of [2]_.
+* Unit tests: API definition, plugin validation, translation to OVN match
+  (every attribute combination and the invalid ones), OVN driver calls, DB
+  migration and cascade delete, and a Northbound schema without
+  ``Mirror_Rule`` (rule creation fails cleanly, lport mirrors still work).
+* Functional tests in ovsdbapp for ``mirror_rule_add/del`` against a real
+  OVN Northbound schema (skipped when the schema has no ``Mirror_Rule``),
+  part of [2]_.
 * The ``neutron-tempest-plugin-tap-as-a-service-ovn`` job currently builds
   OVN ``branch-24.03``, which has no lport mirror. A job variant with OVN
-  25.09 or later will be added, running new tempest API tests (create,
-  list, show, delete, rejected cases) and a scenario test that checks with
-  ``tcpdump`` on the collector that a skipped flow is not copied and a
-  mirrored one is.
+  25.09 or later will be added, running:
+
+  * API tests: create, list, show and delete rules; rejected cases (rule on
+    a gre mirror, priority 0, a direction the mirror does not copy, port
+    range without an L4 protocol, identical rule); rules deleted with their
+    tap mirror; the attribute checks of the table above.
+  * Scenario tests with a collector VM running ``tcpdump``: a ``skip`` rule
+    removes a flow from the collector, a higher priority ``mirror`` rule
+    brings it back, and an ``IN`` only rule leaves the outbound traffic
+    untouched.
+
+TaaS has no functional test suite today, so the OVN backend is covered end
+to end by the tempest job above. If reviewers prefer, a small functional
+suite for the OVN driver can be added on top of the neutron OVN functional
+base.
 
 
 Documentation Impact
