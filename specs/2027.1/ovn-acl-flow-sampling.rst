@@ -234,15 +234,14 @@ Observation identity
 --------------------
 
 Sample metadata is a nonzero 32-bit identifier with a Northbound uniqueness
-constraint. Neutron will allocate one Sample for each stage for the SGs of
-one project rather than one for each ACL, so that overlapping ACLs of the
-same project emit the same observation point whichever one OVN applies. It
+constraint. Neutron will allocate one Sample for each SG and stage, shared
+by the Logs and ACLs of that SG, rather than one for each ACL or Log. It
 will allocate the value with collision detection and bounded retry, and
-reuse it while any owned attachment of that project and stage remains.
-Repeated reconciliation and a neutron-server restart will not allocate new
-Samples for unchanged attachments. A shared SG can carry ports of other
-projects; its Sample still belongs to the SG's owning project. The
-identifier names neither the SG nor the Log, and it is not per-port
+reuse it while any owned attachment of that SG and stage remains. Repeated
+reconciliation and a neutron-server restart will not allocate new Samples
+for unchanged attachments. When ACLs of several logged SGs overlap on one
+port, the emitted identifier is that of whichever SG's ACL OVN applies.
+The identifier names the SG, not the Log, and it is not per-port
 attribution.
 
 A nonzero ACL label can take precedence over Sample metadata as the emitted
@@ -332,6 +331,14 @@ configuration and recovery responsibility between managers. The initial
 implementation instead requires exclusive ownership of those application rows
 and reports an existing foreign owner as a deployment conflict.
 
+Allowing project managers to request sampling for an unshared SG of their
+own project would match the existing Network Log policy. The check would
+have to be repeated whenever the SG is shared or its membership changes,
+and sampling would have to be detached when the check no longer holds. The
+initial implementation keeps the administrative default and leaves that
+follow-up to a later change. Operators can adjust the policy defaults as
+with any other Neutron API.
+
 A drop ACL for each port, or a drop Port Group for each project, would
 avoid overlapping drop ACLs because a port matches exactly one of them. The
 first multiplies ACLs and logical flows with the number of logged ports,
@@ -370,21 +377,21 @@ and conversion of older objects. Driver tests will ensure that flow-sample
 intent is not sent through packet-only drivers or their RPC paths.
 
 OVN functional tests will exercise owned and foreign global rows, identifier
-collisions, foreign ACL references, shared attachments, Samples shared by
-several SGs of one project, and both output deletion orders. They will verify
-that flow-sample-only SG drop ACLs do not enable controller logging. Recovery
-tests will cover postcommit failure, concurrent Log changes, restart, ACL
+collisions, foreign ACL references, shared attachments, Samples shared by the
+Logs and ACLs of one SG, and both output deletion orders. They will verify that
+flow-sample-only SG drop ACLs do not enable controller logging. Recovery tests
+will cover postcommit failure, concurrent Log changes, restart, ACL
 replacement, database synchronization, and disable while Northbound is
 unavailable.
 
 Dataplane tests will cover new, established, and reply traffic, stateless
 rules, DROP, and both ACL directions. They must include nonzero labels with a
 single collector, packet logging before and after sampling, connections that
-predate an output change, and a port in two logged SGs of one project. The
-expected result includes unchanged packet filtering and packet-log behavior as
-well as samples reaching the configured exporter. A separate delivery test will
-verify flow-based IPFIX reception; an absent collector must not alter the ACL's
-allow or drop decision.
+predate an output change, and a port in two logged SGs. The expected result
+includes unchanged packet filtering and packet-log behavior as well as samples
+reaching the configured exporter. A separate delivery test will verify
+flow-based IPFIX reception; an absent collector must not alter the ACL's allow
+or drop decision.
 
 
 Documentation Impact

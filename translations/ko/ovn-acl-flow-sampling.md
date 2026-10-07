@@ -212,14 +212,13 @@ Log 하나를 삭제할 때 모든 logging 필드를 독립적으로 지우는 �
 ### 관찰 식별자 (Observation identity)
 
 Sample metadata는 0이 아닌 32비트 식별자이며 Northbound의 고유성 제약을 따른다.
-Neutron은 ACL마다 Sample을 하나씩 두는 대신 한 프로젝트의 SG들에 대해 단계별로
-Sample 하나를 할당한다. 같은 프로젝트의 겹치는 ACL은 OVN이 어느 것을 적용하든
-같은 observation point를 내보내게 된다. 값은 충돌 검사와 제한된 횟수의 재시도를
-통해 할당하고, 해당 프로젝트와 단계의 소유 연결이 하나라도 남아 있는 동안
+Neutron은 ACL이나 Log마다 Sample을 두는 대신 SG와 단계마다 Sample 하나를
+할당하고, 그 SG의 Log와 ACL이 이를 공유한다. 값은 충돌 검사와 제한된 횟수의
+재시도를 통해 할당하고, 해당 SG와 단계의 소유 연결이 하나라도 남아 있는 동안
 재사용한다. Reconciliation을 반복하거나 neutron-server를 재시작해도 변경되지
-않은 연결에 대해 새 Sample을 할당하지 않는다. 공유 SG에는 다른 프로젝트의 포트가
-포함될 수 있지만, 그 Sample은 여전히 SG를 소유한 프로젝트에 속한다. 이 식별자는
-SG도 Log도 가리키지 않으며 포트 단위 귀속도 아니다.
+않은 연결에 대해 새 Sample을 할당하지 않는다. 한 포트에서 여러 Log 대상 SG의
+ACL이 겹치면 OVN이 적용한 ACL이 속한 SG의 식별자가 내보내진다. 이 식별자는
+Log가 아니라 SG를 가리키며 포트 단위 귀속도 아니다.
 
 0이 아닌 ACL label은 내보내는 observation point를 결정할 때 Sample metadata보다
 우선할 수 있다. 기존 packet logging이 이 label을 사용하므로 sampling을 동작시키기
@@ -296,6 +295,12 @@ ACL 생명주기도 추적해야 한다. Logging driver가 연결을 관리하�
 여러 관리 주체로 나뉜다. 초기 구현은 해당 application row의 독점 소유권을 요구하며,
 기존 외부 소유자가 있으면 배포 환경의 충돌로 보고한다.
 
+Project manager가 자기 프로젝트의 공유되지 않은 SG에 sampling을 요청할 수 있게
+하면 기존 Network Log 정책과 일치한다. 다만 SG가 공유되거나 소속이 바뀔 때마다
+검사를 반복해야 하고, 검사를 통과하지 못하면 sampling을 분리해야 한다. 초기
+구현은 관리자 기본값을 유지하고 이 후속 작업은 이후 변경으로 남긴다. 운영자는
+다른 Neutron API와 마찬가지로 정책 기본값을 조정할 수 있다.
+
 포트별 drop ACL이나 프로젝트별 drop Port Group을 두면 포트가 정확히 하나에만
 일치하므로 drop ACL이 겹치지 않는다. 전자는 ACL과 logical flow 수가 Log 대상
 포트 수에 비례해 늘어나며, Port Group 설계는 바로 이를 피하기 위해 도입되었다.
@@ -327,7 +332,7 @@ API와 object 테스트는 출력 생략, 잘못된 값, 변경 불가 속성, �
 RPC 경로로 전달되지 않는지 확인한다.
 
 OVN 기능 테스트는 Neutron 및 외부 소유의 전역 row, 식별자 충돌, 외부 ACL 참조,
-공유 연결, 한 프로젝트의 여러 SG가 공유하는 Sample, 두 출력의 삭제 순서를 모두
+공유 연결, 한 SG의 Log와 ACL이 공유하는 Sample, 두 출력의 삭제 순서를 모두
 다룬다. Flow-sample 전용 SG drop ACL이
 controller logging을 활성화하지 않는지도 확인한다. 복구 테스트는 postcommit
 실패, 동시 Log 변경, 재시작, ACL 교체, 데이터베이스 동기화, Northbound에 접근할
@@ -336,7 +341,7 @@ controller logging을 활성화하지 않는지도 확인한다. 복구 테스�
 Dataplane 테스트는 new, established, reply 트래픽, stateless 규칙, DROP,
 양쪽 ACL 방향을 다룬다. 단일 collector에서 0이 아닌 label을 사용하는 경우,
 sampling 전후에 packet logging을 설정하는 경우, 출력 변경 전부터 존재하던 연결,
-한 프로젝트의 Log 대상 SG 두 개에 속한 포트를 반드시 포함한다. 기대 결과에는 설정한 exporter로 샘플이 도달하는 것뿐 아니라
+Log 대상 SG 두 개에 속한 포트를 반드시 포함한다. 기대 결과에는 설정한 exporter로 샘플이 도달하는 것뿐 아니라
 패킷 필터링과 packet-log 동작이 그대로 유지되는 것도 포함한다. 별도의 전달
 테스트로 flow-based IPFIX 수신을 확인한다. Collector가 없어도 ACL의 허용·차단
 결정은 바뀌어서는 안 된다.
