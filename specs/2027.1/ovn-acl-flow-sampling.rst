@@ -215,14 +215,8 @@ implicit default deny. If a port belongs to multiple SGs, an observation from
 one of their drop ACLs must not be presented as proof that this SG alone
 caused the denial.
 
-Every logged drop ACL uses the same priority, since it must stay below the
-allow ACLs of every SG on the port. When a port belongs to several SGs with
-logged drop ACLs, more than one of them matches a dropped packet, and OVN
-does not define which one is applied. Allow ACLs of different SGs that
-match the same packet overlap in the same way. Neither the Log name nor the
-emitted observation point can then identify which of the overlapping SGs
-produced an observation. Distinct priorities would not resolve this: a drop
-ACL raised above another SG's allow ACL would drop traffic that SG permits.
+Logged drop ACLs of different SGs on one port share a priority, and OVN
+does not define which one is applied. The same holds for their allow ACLs.
 
 For each ACL, the driver will calculate the union of enabled Logs separately
 for each output. With packet Log A and sampling Log B, both outputs will be

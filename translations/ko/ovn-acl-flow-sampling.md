@@ -195,14 +195,8 @@ Drop 관찰 결과는 선택된 drop ACL을 식별한다. Security group에는 �
 포트가 여러 SG에 속할 때 그중 하나의 drop ACL에서 나온 관찰 결과를 해당 SG만이
 거부 원인이라는 증거로 제시해서는 안 된다.
 
-Log 대상 drop ACL은 모두 같은 priority를 사용한다. 포트에 적용되는 모든 SG의
-허용 ACL보다 낮아야 하기 때문이다. 포트가 Log 대상 drop ACL을 가진 여러 SG에
-속하면 drop된 패킷에 둘 이상의 ACL이 일치하며, OVN은 그중 어느 것이 적용되는지
-정의하지 않는다. 같은 패킷에 일치하는 서로 다른 SG의 허용 ACL도 같은 방식으로
-겹친다. 따라서 Log 이름도 내보낸 observation point도 겹치는 SG 중 어느 것이
-관찰 결과를 만들었는지 식별할 수 없다. Priority를 다르게 부여해도 해결되지
-않는다. 다른 SG의 허용 ACL보다 높게 올린 drop ACL은 그 SG가 허용하는 트래픽을
-차단하기 때문이다.
+한 포트에 적용되는 서로 다른 SG의 Log 대상 drop ACL은 같은 priority를 쓰며,
+OVN은 그중 어느 것이 적용되는지 정의하지 않는다. 허용 ACL도 마찬가지다.
 
 Driver는 각 ACL에 대해 출력 방식별로 활성화된 Log의 합집합을 계산한다. Packet
 Log A와 sampling Log B가 있으면 두 출력이 모두 존재한다. B를 삭제하면 sampling
