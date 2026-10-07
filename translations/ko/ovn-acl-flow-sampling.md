@@ -114,7 +114,7 @@ Log는 선택 필드 두 개로 트래픽을 고른다. `resource_id`는 securit
 고르는 용도로만 쓴다. `resource_id`가 있으면 그 security group의 Port Group을
 고르고 `target_id`는 무시한다. `target_id`만 있으면 그 포트에 연결된 security
 group들을 조회해 각 group의 Port Group을 고른다. 둘 다 없으면 Northbound
-데이터베이스의 모든 Port Group을 고른다. 어느 경우든 선택된 ACL은 Port Group에
+데이터베이스의 모든 Port Group을 고르고, `DROP`이면 공용 drop Port Group만 고른다. 어느 경우든 선택된 ACL은 Port Group에
 속하므로 그 group의 모든 멤버 포트에 적용되며, `target_id`로 지정한 포트에만
 적용되지 않는다. 공유 security group에는 여러 프로젝트의 포트가 포함될 수도 있다.
 
@@ -312,9 +312,8 @@ flowchart LR
 ```
 
 이 계산은 기존 packet logging 필드, sampling 참조, SG별 drop ACL을 함께 다룬다.
-Log 하나를 삭제할 때 ACL의 모든 logging 필드를 그냥 지울 수는 없다. Packet
-logging이 설정한 0이 아닌 label이 sampling이 내보내는 observation point를 바꾸기
-때문이다. Sampling을 추가하거나 제거할 때 reconciliation은 packet logging의
+Log 하나를 삭제할 때 ACL의 모든 logging 필드를 그냥 지울 수는 없다. Sampling
+참조와 label이 남아 있는 Log와 공유되기 때문이다. Sampling을 추가하거나 제거할 때 reconciliation은 packet logging의
 related-traffic 동작을 보존한다.
 
 ### 관찰 식별자 (Observation identity)
@@ -333,7 +332,8 @@ Log가 아니라 SG와 action을 가리키며 포트 단위 귀속도 아니다.
 우선할 수 있다. 기존 packet logging이 이 label을 사용하므로 sampling을 동작시키기
 위해 label을 지우지 않는다. 대신 sampling이 붙은 ACL에 packet logging이 0이 아닌
 label을 필요로 하면, Neutron은 그 label을 해당 ACL의 new 단계 Sample metadata
-값으로 설정해 내보내는 값이 같게 유지되도록 한다. 지원하는 dataplane 조합은 단일 collector와 register
+값으로 설정해 내보내는 값이 같게 유지되도록 한다. label을 바꾸면 이전 값으로
+commit된 연결의 related-traffic 로깅은 그 연결이 끝날 때까지 영향을 받는다. 지원하는 dataplane 조합은 단일 collector와 register
 기반 sampling을 사용하는 경우를 포함해 packet logging과 sampling이 공존할 때도
 sampling을 유지해야 한다.
 
@@ -498,7 +498,7 @@ API와 object 테스트는 출력 생략, 잘못된 값, 변경 불가 속성, �
 RPC 경로로 전달되지 않는지 확인한다.
 
 OVN 기능 테스트는 Neutron 및 외부 소유의 전역 row, 식별자 충돌, 외부 ACL 참조,
-공유 연결, 한 SG의 Log와 ACL이 공유하는 Sample, 두 출력의 삭제 순서를 모두
+공유 연결, 한 SG와 action의 Log와 ACL이 공유하는 Sample, 두 출력의 삭제 순서를 모두
 다룬다. Flow-sample 전용 SG drop ACL이
 controller logging을 활성화하지 않는지도 확인한다. 복구 테스트는 postcommit
 실패, 동시 Log 변경, 재시작, ACL 교체, 데이터베이스 동기화, Northbound에 접근할

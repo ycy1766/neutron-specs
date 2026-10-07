@@ -85,14 +85,14 @@ Initial scope and policy
 ------------------------
 
 A Log selects traffic with two optional fields: ``resource_id`` names a
-security group and ``target_id`` names a port. The ML2/OVN driver uses
-them only to choose Port Groups. With ``resource_id`` it selects that
-security group's Port Group and ignores ``target_id``. With ``target_id``
-alone it looks up the security groups attached to that port and selects
-each of their Port Groups. With neither it selects every Port Group in
-the Northbound database. In every case the selected ACLs belong to a
-Port Group and apply to all of its member ports, not only to the port
-named by ``target_id``. A shared security group can also contain ports
+security group and ``target_id`` names a port. The ML2/OVN driver uses them
+only to choose Port Groups. With ``resource_id`` it selects that security
+group's Port Group and ignores ``target_id``. With ``target_id`` alone it looks
+up the security groups attached to that port and selects each of their Port
+Groups. With neither it selects every Port Group in the Northbound database, or
+only the shared drop Port Group for ``DROP``. In every case the selected ACLs
+belong to a Port Group and apply to all of its member ports, not only to the
+port named by ``target_id``. A shared security group can also contain ports
 from several projects.
 
 For ``flow_sample``, the request will require
@@ -238,10 +238,10 @@ An output will be removed only when no enabled Log requires it.
 
 The calculation will cover the existing packet logging fields, the sampling
 references, and the SG-specific drop ACLs together. Deleting one Log cannot
-simply clear every logging field on the ACL: a nonzero label set by packet
-logging changes the observation point emitted by sampling. Reconciliation
-will preserve packet logging's related-traffic behavior when sampling is
-added or removed.
+simply clear every logging field on the ACL, because the sampling references
+and the label are shared with the Logs that remain. Reconciliation will
+preserve packet logging's related-traffic behavior when sampling is added or
+removed.
 
 Observation identity
 --------------------
@@ -263,9 +263,10 @@ observation point. Existing packet logging uses that label, so this feature
 will not clear it to make sampling work. Instead, when packet logging needs a
 nonzero label on an ACL that also carries sampling, Neutron will set that label
 to the ACL's new-stage Sample metadata, so the emitted value stays the same.
-The supported dataplane combinations must preserve sampling when packet logging
-and sampling coexist, including with a single collector and register-based
-sampling.
+Changing a label affects related-traffic logging of connections committed under
+the previous value until they end. The supported dataplane combinations must
+preserve sampling when packet logging and sampling coexist, including with a
+single collector and register-based sampling.
 
 The observation domain ID also contains a logical datapath identifier.
 Depending on the OVN path and the presence of an ACL label, its application
@@ -396,10 +397,10 @@ intent is not sent through packet-only drivers or their RPC paths.
 
 OVN functional tests will exercise owned and foreign global rows, identifier
 collisions, foreign ACL references, shared attachments, Samples shared by the
-Logs and ACLs of one SG, and both output deletion orders. They will verify that
-flow-sample-only SG drop ACLs do not enable controller logging. Recovery tests
-will cover postcommit failure, concurrent Log changes, restart, ACL
-replacement, database synchronization, and disable while Northbound is
+Logs and ACLs of one SG and action, and both output deletion orders. They will
+verify that flow-sample-only SG drop ACLs do not enable controller logging.
+Recovery tests will cover postcommit failure, concurrent Log changes, restart,
+ACL replacement, database synchronization, and disable while Northbound is
 unavailable.
 
 Dataplane tests will cover new, established, and reply traffic, stateless
