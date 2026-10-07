@@ -200,18 +200,29 @@ ACL selection and overlapping Logs
 ----------------------------------
 
 ``ACCEPT`` will select the SG's allowing ACLs. ``DROP`` will use the
-SG-specific drop ACLs maintained by the OVN logging driver, and ``ALL``
-will select both.
-The existing priority and match of those drop ACLs will be retained. Their
-presence will depend on whether either output still requires them. A
-flow-sample-only request will not enable controller logging as a side effect
-of creating a drop ACL.
+SG-specific drop ACLs that the OVN logging driver creates on a logged SG's
+Port Group since bug 2110087, and ``ALL`` will select both. Those ACLs sit
+between the SG allow ACLs and the shared ``neutron_pg_drop`` ACLs, so the
+drops of a logged SG are observed on its own ACL rather than on the global
+one. This proposal depends on that change and will not alter the priority
+or match of those ACLs. Their presence will depend on whether either output
+still requires them. A flow-sample-only request will not enable controller
+logging as a side effect of creating a drop ACL.
 
 A drop observation identifies the selected drop ACL. It does not identify an
 explicit SG deny rule, since security groups contain allow rules and an
 implicit default deny. If a port belongs to multiple SGs, an observation from
 one of their drop ACLs must not be presented as proof that this SG alone
 caused the denial.
+
+Every logged drop ACL uses the same priority, since it must stay below the
+allow ACLs of every SG on the port. When a port belongs to several SGs with
+logged drop ACLs, more than one of them matches a dropped packet, and OVN
+does not define which one is applied. Allow ACLs of different SGs that
+match the same packet overlap in the same way. Neither the Log name nor the
+emitted observation point can then identify which of the overlapping SGs
+produced an observation. Distinct priorities would not resolve this: a drop
+ACL raised above another SG's allow ACL would drop traffic that SG permits.
 
 For each ACL, the driver will calculate the union of enabled Logs separately
 for each output. With packet Log A and sampling Log B, both outputs will be
@@ -229,10 +240,16 @@ Observation identity
 --------------------
 
 Sample metadata is a nonzero 32-bit identifier with a Northbound uniqueness
-constraint. Neutron will allocate it with collision detection and bounded
-retry, and reuse it while the same owned attachment remains valid. Repeated
-reconciliation and a neutron-server restart will not allocate new Samples
-for unchanged attachments.
+constraint. Neutron will allocate one Sample for each stage for the SGs of
+one project rather than one for each ACL, so that overlapping ACLs of the
+same project emit the same observation point whichever one OVN applies. It
+will allocate the value with collision detection and bounded retry, and
+reuse it while any owned attachment of that project and stage remains.
+Repeated reconciliation and a neutron-server restart will not allocate new
+Samples for unchanged attachments. A shared SG can carry ports of other
+projects; its Sample still belongs to the SG's owning project. The
+identifier names neither the SG nor the Log, and it is not per-port
+attribution.
 
 A nonzero ACL label can take precedence over Sample metadata as the emitted
 observation point. Existing packet logging uses that label, so this feature
@@ -321,6 +338,14 @@ configuration and recovery responsibility between managers. The initial
 implementation instead requires exclusive ownership of those application rows
 and reports an existing foreign owner as a deployment conflict.
 
+A drop ACL for each port, or a drop Port Group for each project, would
+avoid overlapping drop ACLs because a port matches exactly one of them. The
+first multiplies ACLs and logical flows with the number of logged ports,
+which the Port Group design was introduced to avoid. The second needs a Log
+selector that is not a security group and membership maintenance for every
+port. Both are left for later work; this proposal keeps the SG drop ACLs
+and describes their attribution limits.
+
 
 Implementation
 ==============
@@ -351,19 +376,21 @@ and conversion of older objects. Driver tests will ensure that flow-sample
 intent is not sent through packet-only drivers or their RPC paths.
 
 OVN functional tests will exercise owned and foreign global rows, identifier
-collisions, foreign ACL references, shared attachments, and both output
-deletion orders. They will verify that flow-sample-only SG drop ACLs do not
-enable controller logging. Recovery tests will cover postcommit failure,
-concurrent Log changes, restart, ACL replacement, database synchronization,
-and disable while Northbound is unavailable.
+collisions, foreign ACL references, shared attachments, Samples shared by
+several SGs of one project, and both output deletion orders. They will verify
+that flow-sample-only SG drop ACLs do not enable controller logging. Recovery
+tests will cover postcommit failure, concurrent Log changes, restart, ACL
+replacement, database synchronization, and disable while Northbound is
+unavailable.
 
 Dataplane tests will cover new, established, and reply traffic, stateless
-rules, DROP, and both ACL directions. They must include nonzero labels with
-a single collector, packet logging before and after sampling, and connections
-that predate an output change. The expected result includes unchanged packet
-filtering and packet-log behavior as well as samples reaching the configured
-exporter. A separate delivery test will verify flow-based IPFIX reception;
-an absent collector must not alter the ACL's allow or drop decision.
+rules, DROP, and both ACL directions. They must include nonzero labels with a
+single collector, packet logging before and after sampling, connections that
+predate an output change, and a port in two logged SGs of one project. The
+expected result includes unchanged packet filtering and packet-log behavior as
+well as samples reaching the configured exporter. A separate delivery test will
+verify flow-based IPFIX reception; an absent collector must not alter the ACL's
+allow or drop decision.
 
 
 Documentation Impact
@@ -392,3 +419,5 @@ References
 * Host IPFIX exporter configuration (OVS IPFIX and Flow_Sample_Collector_Set):
   https://www.openvswitch.org/support/dist-docs/ovs-vswitchd.conf.db.5.html
 * Related flow-log RFE: https://bugs.launchpad.net/neutron/+bug/2071323
+* Per-SG logged drop ACLs (bug 2110087):
+  https://review.opendev.org/c/openstack/neutron/+/977349

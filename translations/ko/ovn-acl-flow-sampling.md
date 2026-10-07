@@ -182,16 +182,27 @@ Neutron은 ACL에 연결 소유권과 예상 참조를 기록한다. 참조된 S
 
 ### ACL 선택과 중복 Log (ACL selection and overlapping Logs)
 
-`ACCEPT`는 SG의 허용 ACL을 선택한다. `DROP`은 OVN logging driver가 관리하는
-SG별 drop ACL을 사용하며, `ALL`은 둘 다 선택한다. 해당 drop ACL의 기존 priority와
-match는 유지한다. 두 출력 중 어느 하나라도 필요로 하면 해당 ACL을 유지한다.
-Flow-sample만 요청했을 때 drop ACL 생성의 부수 효과로 controller logging이
-활성화되어서는 안 된다.
+`ACCEPT`는 SG의 허용 ACL을 선택한다. `DROP`은 bug 2110087 이후 OVN logging
+driver가 Log 대상 SG의 Port Group에 생성하는 SG별 drop ACL을 사용하며, `ALL`은
+둘 다 선택한다. 이 ACL은 SG 허용 ACL과 공용 `neutron_pg_drop` ACL 사이에
+위치하므로, Log 대상 SG의 drop은 전역 ACL이 아니라 해당 SG의 ACL에서 관찰된다.
+이 제안은 그 변경에 의존하며 해당 ACL의 priority와 match를 바꾸지 않는다. 두
+출력 중 어느 하나라도 필요로 하면 해당 ACL을 유지한다. Flow-sample만 요청했을 때
+drop ACL 생성의 부수 효과로 controller logging이 활성화되어서는 안 된다.
 
 Drop 관찰 결과는 선택된 drop ACL을 식별한다. Security group에는 허용 규칙과
 암묵적인 기본 거부가 있으므로, 이 결과가 명시적인 SG deny rule을 식별하지는 않는다.
 포트가 여러 SG에 속할 때 그중 하나의 drop ACL에서 나온 관찰 결과를 해당 SG만이
 거부 원인이라는 증거로 제시해서는 안 된다.
+
+Log 대상 drop ACL은 모두 같은 priority를 사용한다. 포트에 적용되는 모든 SG의
+허용 ACL보다 낮아야 하기 때문이다. 포트가 Log 대상 drop ACL을 가진 여러 SG에
+속하면 drop된 패킷에 둘 이상의 ACL이 일치하며, OVN은 그중 어느 것이 적용되는지
+정의하지 않는다. 같은 패킷에 일치하는 서로 다른 SG의 허용 ACL도 같은 방식으로
+겹친다. 따라서 Log 이름도 내보낸 observation point도 겹치는 SG 중 어느 것이
+관찰 결과를 만들었는지 식별할 수 없다. Priority를 다르게 부여해도 해결되지
+않는다. 다른 SG의 허용 ACL보다 높게 올린 drop ACL은 그 SG가 허용하는 트래픽을
+차단하기 때문이다.
 
 Driver는 각 ACL에 대해 출력 방식별로 활성화된 Log의 합집합을 계산한다. Packet
 Log A와 sampling Log B가 있으면 두 출력이 모두 존재한다. B를 삭제하면 sampling
@@ -207,9 +218,14 @@ Log 하나를 삭제할 때 모든 logging 필드를 독립적으로 지우는 �
 ### 관찰 식별자 (Observation identity)
 
 Sample metadata는 0이 아닌 32비트 식별자이며 Northbound의 고유성 제약을 따른다.
-Neutron은 충돌 검사와 제한된 횟수의 재시도를 통해 이 값을 할당하고, 같은 소유
-연결이 유효한 동안 재사용한다. Reconciliation을 반복하거나 neutron-server를
-재시작해도 변경되지 않은 연결에 대해 새 Sample을 할당하지 않는다.
+Neutron은 ACL마다 Sample을 하나씩 두는 대신 한 프로젝트의 SG들에 대해 단계별로
+Sample 하나를 할당한다. 같은 프로젝트의 겹치는 ACL은 OVN이 어느 것을 적용하든
+같은 observation point를 내보내게 된다. 값은 충돌 검사와 제한된 횟수의 재시도를
+통해 할당하고, 해당 프로젝트와 단계의 소유 연결이 하나라도 남아 있는 동안
+재사용한다. Reconciliation을 반복하거나 neutron-server를 재시작해도 변경되지
+않은 연결에 대해 새 Sample을 할당하지 않는다. 공유 SG에는 다른 프로젝트의 포트가
+포함될 수 있지만, 그 Sample은 여전히 SG를 소유한 프로젝트에 속한다. 이 식별자는
+SG도 Log도 가리키지 않으며 포트 단위 귀속도 아니다.
 
 0이 아닌 ACL label은 내보내는 observation point를 결정할 때 Sample metadata보다
 우선할 수 있다. 기존 packet logging이 이 label을 사용하므로 sampling을 동작시키기
@@ -286,6 +302,13 @@ ACL 생명주기도 추적해야 한다. Logging driver가 연결을 관리하�
 여러 관리 주체로 나뉜다. 초기 구현은 해당 application row의 독점 소유권을 요구하며,
 기존 외부 소유자가 있으면 배포 환경의 충돌로 보고한다.
 
+포트별 drop ACL이나 프로젝트별 drop Port Group을 두면 포트가 정확히 하나에만
+일치하므로 drop ACL이 겹치지 않는다. 전자는 ACL과 logical flow 수가 Log 대상
+포트 수에 비례해 늘어나며, Port Group 설계는 바로 이를 피하기 위해 도입되었다.
+후자는 security group이 아닌 Log selector와 모든 포트에 대한 소속 유지 작업이
+필요하다. 둘 다 이후 작업으로 남긴다. 이 제안은 SG별 drop ACL을 유지하고 그
+귀속 한계를 설명한다.
+
 ## 구현 (Implementation)
 
 구현 작업은 다음과 같다.
@@ -310,15 +333,16 @@ API와 object 테스트는 출력 생략, 잘못된 값, 변경 불가 속성, �
 RPC 경로로 전달되지 않는지 확인한다.
 
 OVN 기능 테스트는 Neutron 및 외부 소유의 전역 row, 식별자 충돌, 외부 ACL 참조,
-공유 연결, 두 출력의 삭제 순서를 모두 다룬다. Flow-sample 전용 SG drop ACL이
+공유 연결, 한 프로젝트의 여러 SG가 공유하는 Sample, 두 출력의 삭제 순서를 모두
+다룬다. Flow-sample 전용 SG drop ACL이
 controller logging을 활성화하지 않는지도 확인한다. 복구 테스트는 postcommit
 실패, 동시 Log 변경, 재시작, ACL 교체, 데이터베이스 동기화, Northbound에 접근할
 수 없을 때의 비활성화를 다룬다.
 
 Dataplane 테스트는 new, established, reply 트래픽, stateless 규칙, DROP,
 양쪽 ACL 방향을 다룬다. 단일 collector에서 0이 아닌 label을 사용하는 경우,
-sampling 전후에 packet logging을 설정하는 경우, 출력 변경 전부터 존재하던 연결을
-반드시 포함한다. 기대 결과에는 설정한 exporter로 샘플이 도달하는 것뿐 아니라
+sampling 전후에 packet logging을 설정하는 경우, 출력 변경 전부터 존재하던 연결,
+한 프로젝트의 Log 대상 SG 두 개에 속한 포트를 반드시 포함한다. 기대 결과에는 설정한 exporter로 샘플이 도달하는 것뿐 아니라
 패킷 필터링과 packet-log 동작이 그대로 유지되는 것도 포함한다. 별도의 전달
 테스트로 flow-based IPFIX 수신을 확인한다. Collector가 없어도 ACL의 허용·차단
 결정은 바뀌어서는 안 된다.
@@ -345,3 +369,5 @@ Logging guide는 명시적 활성화 설정, 지원하는 OVN/OVS 조합, 소유
 - 호스트 IPFIX exporter 설정 (OVS IPFIX와 Flow_Sample_Collector_Set):
   <https://www.openvswitch.org/support/dist-docs/ovs-vswitchd.conf.db.5.html>
 - 관련 flow-log RFE: <https://bugs.launchpad.net/neutron/+bug/2071323>
+- SG별 Log 대상 drop ACL (bug 2110087):
+  <https://review.opendev.org/c/openstack/neutron/+/977349>
