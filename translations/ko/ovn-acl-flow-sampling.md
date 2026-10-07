@@ -10,8 +10,8 @@
 
 <https://bugs.launchpad.net/neutron/+bug/2165306>
 
-ML2/OVN logging driver는 ACL logging을 사용해 패킷 이벤트를 ovn-controller로
-전달한다. 이 제안은 Network Log에 출력 방식을 추가해 운영자가 OVN ACL sampling을
+ML2/OVN logging driver는 ACL logging을 사용해 ovn-controller가 일치하는 패킷을
+기록하게 한다. 이 제안은 Network Log에 출력 방식을 추가해 운영자가 OVN ACL sampling을
 선택할 수 있게 한다. Neutron은 선택한 ACL에 연결된 sampling 리소스를 관리한다.
 호스트의 exporter와 샘플을 수신·처리하는 시스템은 운영자가 구성한다.
 
@@ -74,8 +74,8 @@ flowchart LR
 이 속성은 생성 요청에서 지정할 수 있고 show와 list 응답에 반환된다. 값이 같은
 항목을 찾는 필터를 지원하며, 생성 후에는 변경할 수 없다. 출력 방식을 바꾸려면
 새 Log를 만들고 기존 Log를 제거해야 한다. 기존 `enabled` 속성은 두 출력 방식
-모두에 적용된다. 하나의 Log는 출력 방식 하나를 선택한다. 같은 ACL에 두 출력을
-모두 요청하려면 별도의 Log를 사용한다.
+모두에 적용된다. 하나의 Log는 출력 방식 하나를 선택한다. 같은 security group에
+두 출력을 모두 요청하려면 별도의 Log를 사용한다.
 
 예를 들어 운영자는 다음과 같이 sampling을 요청할 수 있다. 예제의 resource UUID는
 이미 존재하는 security group을 가리킨다.
@@ -132,7 +132,8 @@ Packet-log 권한의 기존 기본값은 유지한다. 기존 Log의 조회·비
 
 ### 배포 요구 사항과 기능 지원 정보 (Deployment requirements and capability)
 
-Extension alias는 API가 새 필드를 이해한다는 것을 나타낸다. 기존
+`logging-output-type` extension alias는 API가 새 필드를 이해한다는 것을
+나타낸다. 기존
 loggable-resources 응답은 리소스 유형별 지원 출력 방식을 설명한다. Sampling을
 활성화한 배포 환경에서는 다음 내용을 포함한다.
 
@@ -192,14 +193,15 @@ application은 drop ACL에서 패킷을 sampling하는 것과 별개이며, 이 
 
 Application과 collector row에는 Neutron 소유권 메타데이터를 기록한다. 기능이
 활성화되어 있는 동안에는 flow-sample Log가 일시적으로 하나도 없더라도 배포 환경의
-리소스로 유지한다. 마지막 Log를 제거해도 이 row들을 삭제하지 않는다. 기능을 완전히
-철거할 때는 Neutron이 소유하고 다른 사용자가 더 이상 참조하지 않는 row만 제거한다.
+리소스로 유지한다. 마지막 Log를 제거하거나 옵션을 비활성화해도 이 row들을 삭제하지 않는다.
+운영자는 옵션을 비활성화하고 소유 연결이 남아 있지 않음을 확인한 뒤 이 row들을
+제거한다.
 Neutron은 호스트 로컬 OVS exporter 설정을 수정하지 않는다.
 
 선택된 stateful `allow-related` ACL은 `sample_new`와 `sample_est` 모두를 통해
 Sample을 참조한다. Stateless 허용 ACL과 drop ACL은 `sample_new`를 사용한다.
-Log에 `event=ALL`을 설정해도 이 ACL들에 established-connection 이벤트가 추가되지는
-않는다. 같은 ACL을 선택한 Log들은 해당 ACL의 sampling 설정을 공유한다. Sample
+Log의 `event`는 ACL의 action을 선택하는 것이지 연결 단계를 선택하는 것이 아니다.
+established 단계의 샘플은 stateful allow-related ACL에만 있다. 같은 ACL을 선택한 Log들은 해당 ACL의 sampling 설정을 공유한다. Sample
 생성과 ACL 연결은 하나의 Northbound 트랜잭션에서 수행한다. 연결을 제거한 뒤 다른
 참조가 없는 Sample은 OVSDB의 strong-reference garbage collection으로 제거할 수 있다.
 
@@ -218,8 +220,8 @@ flowchart TB
     APPN["Sampling_App type=acl-new<br/>Neutron 소유, NB에 type당 하나"]
     APPE["Sampling_App type=acl-est<br/>Neutron 소유, NB에 type당 하나"]
     SC["Sample_Collector<br/>id, set_id, probability<br/>Neutron 소유 (external_ids)"]
-    SN["Sample (new)<br/>metadata = SG·stage 식별자<br/>external_ids 없음"]
-    SE["Sample (est)<br/>metadata = SG·stage 식별자<br/>external_ids 없음"]
+    SN["Sample (allow-new / drop)<br/>metadata = SG·stage·action 식별자<br/>external_ids 없음"]
+    SE["Sample (allow-est)<br/>metadata = SG·stage·action 식별자<br/>external_ids 없음"]
     ACL1["SG ACL allow-related<br/>sample_new, sample_est<br/>external_ids: 소유권·기대 참조"]
     ACL2["SG ACL allow-stateless / drop<br/>sample_new만"]
     FSCS["OVS Flow_Sample_Collector_Set<br/>id = set_id (운영자 구성)"]
@@ -239,8 +241,8 @@ flowchart TB
 driver가 Log 대상 SG의 Port Group에 생성하는 SG별 drop ACL을 사용하며, `ALL`은
 둘 다 선택한다. 이 ACL은 SG 허용 ACL과 공용 `neutron_pg_drop` ACL 사이에
 위치하므로, Log 대상 SG의 drop은 전역 ACL이 아니라 해당 SG의 ACL에서 관찰된다.
-이 제안은 그 변경에 의존하며 해당 ACL의 priority와 match를 바꾸지 않는다. 두
-출력 중 어느 하나라도 필요로 하면 해당 ACL을 유지한다. Flow-sample만 요청했을 때
+이 제안은 그 변경에 의존하며 해당 ACL의 priority와 match를 바꾸지 않는다. 이
+drop ACL은 두 출력 중 어느 하나라도 필요로 하는 동안만 존재한다. Flow-sample만 요청했을 때
 drop ACL 생성의 부수 효과로 controller logging이 활성화되어서는 안 된다.
 
 Drop 관찰 결과는 선택된 drop ACL을 식별한다. Security group에는 허용 규칙과
@@ -301,36 +303,41 @@ flowchart LR
     FS -.-> NOTE2
 ```
 
-이 계산에는 기존 packet logging 필드와 SG별 drop ACL의 생명주기도 포함한다.
-Log 하나를 삭제할 때 모든 logging 필드를 독립적으로 지우는 방식으로 구현할 수는
-없다. Sampling 경로에서도 ACL label을 사용하기 때문이다. Sampling을 추가하거나
-제거할 때 reconciliation은 packet logging의 related-traffic 동작을 보존한다.
+이 계산은 기존 packet logging 필드, sampling 참조, SG별 drop ACL을 함께 다룬다.
+Log 하나를 삭제할 때 ACL의 모든 logging 필드를 그냥 지울 수는 없다. Packet
+logging이 설정한 0이 아닌 label이 sampling이 내보내는 observation point를 바꾸기
+때문이다. Sampling을 추가하거나 제거할 때 reconciliation은 packet logging의
+related-traffic 동작을 보존한다.
 
 ### 관찰 식별자 (Observation identity)
 
 Sample metadata는 0이 아닌 32비트 식별자이며 Northbound의 고유성 제약을 따른다.
-Neutron은 ACL이나 Log마다 Sample을 두는 대신 SG와 단계마다 Sample 하나를
-할당하고, 그 SG의 Log와 ACL이 이를 공유한다. 값은 충돌 검사와 제한된 횟수의
-재시도를 통해 할당하고, 해당 SG와 단계의 소유 연결이 하나라도 남아 있는 동안
+Neutron은 ACL이나 Log마다 Sample을 두는 대신 SG, 단계, ACL action마다 Sample
+하나를 할당한다. 한 SG의 allow-new, allow-established, drop 관찰은 서로 구분되고,
+그 SG의 Log와 ACL은 이를 공유한다. 값은 충돌 검사와 제한된 횟수의
+재시도를 통해 할당하고, 해당 SG, 단계, action의 소유 연결이 하나라도 남아 있는 동안
 재사용한다. Reconciliation을 반복하거나 neutron-server를 재시작해도 변경되지
 않은 연결에 대해 새 Sample을 할당하지 않는다. 한 포트에서 여러 Log 대상 SG의
 ACL이 겹치면 OVN이 적용한 ACL이 속한 SG의 식별자가 내보내진다. 이 식별자는
-Log가 아니라 SG를 가리키며 포트 단위 귀속도 아니다.
+Log가 아니라 SG와 action을 가리키며 포트 단위 귀속도 아니다.
 
 0이 아닌 ACL label은 내보내는 observation point를 결정할 때 Sample metadata보다
 우선할 수 있다. 기존 packet logging이 이 label을 사용하므로 sampling을 동작시키기
-위해 label을 지우지 않는다. 지원하는 dataplane 조합은 단일 collector와 register
+위해 label을 지우지 않는다. 대신 sampling이 붙은 ACL에 packet logging이 0이 아닌
+label을 필요로 하면, Neutron은 그 label을 해당 ACL의 new 단계 Sample metadata
+값으로 설정해 내보내는 값이 같게 유지되도록 한다. 지원하는 dataplane 조합은 단일 collector와 register
 기반 sampling을 사용하는 경우를 포함해 packet logging과 sampling이 공존할 때도
 sampling을 유지해야 한다.
 
-Observation domain에는 logical datapath 식별자도 포함된다. OVN 처리 경로와
+Observation domain ID에는 logical datapath 식별자도 포함된다. OVN 처리 경로와
 ACL label 유무에 따라 domain의 application 부분은 new와 established 관찰을
 구분할 수도 있고 0일 수도 있다. Consumer는 application ID가 항상 이 두 단계를
 구분한다고 가정할 수 없다. 운영자는 내보낸 식별자를 해석하기 위해 해당 OVN의
 매핑 정보가 필요하다.
 
 이 식별자들은 Log UUID나 영구적인 SG-rule 식별자가 아니다. Packet logging을
-추가하거나 제거하면 ACL label을 통해 실제 observation point가 바뀔 수 있다.
+추가하거나 제거해도 내보내는 값은 유지되지만, observation domain이 단계를
+구분하는지는 바뀔 수 있다.
 ACL 교체나 Northbound 데이터베이스 복원도 매핑을 바꿀 수 있다. 기존 연결은 설정이
 변경된 뒤에도 이전 conntrack metadata를 유지할 수 있다. 이 기능은 모든 기존
 연결의 즉각적인 재매핑이나 과거 트래픽의 소급 sampling을 보장하지 않는다.
@@ -399,7 +406,8 @@ sequenceDiagram
 중에 이전 worker가 flow-sample 요청 상태를 접하지 않도록 한다. 기능 지원을
 알리기 전에 worker 간 설정이 일치해야 한다.
 
-배포 옵션을 비활성화하면 새로운 flow-sample 요청과 활성화 작업을 거부한다. 기존
+배포 옵션을 비활성화하면 새로운 flow-sample 요청과 기존
+flow-sample Log의 활성화 시도를 거부한다. 기존
 Log의 조회·비활성화·삭제는 계속 가능하다. 필요한 스키마를 갖춘 Northbound에
 접근할 수 있으면 reconciliation이 저장된 Log 요청 상태를 유지하면서 Neutron
 소유의 sampling 참조를 분리한다. 옵션을 다시 활성화하면 활성 상태의 Log를 다시
@@ -467,7 +475,8 @@ Project manager가 자기 프로젝트의 공유되지 않은 SG에 sampling을 
 - Sampling을 복원하는 maintenance와 데이터베이스 동기화 지원.
 
 조건부 연결 관리에 필요한 ovsdbapp command에는 트랜잭션 테스트를 포함한다.
-기능 지원을 알리기 전에 dataplane 호환성, 특히 ACL label 공존을 확인해야 한다.
+운영자는 기능 지원을 알리기 전에 dataplane 호환성, 특히 ACL label 공존을 확인해야
+한다.
 
 기존 `openstack network log` 명령은 python-neutronclient OSC plugin이 제공한다.
 Create에 `--output-type`을 추가하고 show, list, loggable-resources 출력에 새

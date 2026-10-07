@@ -10,8 +10,8 @@ OVN ACL flow sampling for Network Log
 
 https://bugs.launchpad.net/neutron/+bug/2165306
 
-The ML2/OVN logging driver uses ACL logging to send packet events to
-ovn-controller. This proposal adds an output choice to Network Log so that
+The ML2/OVN logging driver uses ACL logging to have ovn-controller record
+matching packets. This proposal adds an output choice to Network Log so that
 operators can request OVN ACL sampling instead. Neutron will manage the
 sampling resources associated with the selected ACLs. Operators will configure
 the host exporters and the systems that receive and process the samples.
@@ -50,11 +50,11 @@ resource, with values ``packet_log`` and ``flow_sample``. The default,
 ``packet_log``, preserves the backend's current logging behavior for existing
 Logs and requests that omit the field.
 
-The attribute will be accepted on create and returned by show and list. It
-will support equality filtering and will not be mutable. A caller that needs
-a different output will create a replacement Log and remove the old one.
-The existing ``enabled`` attribute will control either output. A Log will
-select one output; separate Logs can request both outputs for the same ACL.
+The attribute will be accepted on create and returned by show and list. It will
+support equality filtering and will not be mutable. A caller that needs a
+different output will create a replacement Log and remove the old one. The
+existing ``enabled`` attribute will control either output. A Log will select
+one output; separate Logs can request both outputs for the same security group.
 
 For example, an operator can request sampling as follows. The resource UUID
 in this example represents an existing security group::
@@ -110,9 +110,10 @@ change. Checking the SG's project only when the Log is created is insufficient.
 Deployment requirements and capability
 --------------------------------------
 
-The extension alias will indicate that the API understands the new field.
-The existing loggable-resources response will describe the outputs supported
-for each resource type. In a deployment with sampling enabled it will include::
+The ``logging-output-type`` extension alias will indicate that the API
+understands the new field. The existing loggable-resources response will
+describe the outputs supported for each resource type. In a deployment with
+sampling enabled it will include::
 
     {
         "loggable_resources": [
@@ -172,21 +173,21 @@ unique keys and will not be used alone to identify an owned row. The generic
 ``drop`` sampling application is separate from sampling packets at drop ACLs
 and will not be managed by this feature.
 
-The application and collector rows will carry Neutron ownership metadata.
-They will remain deployment resources while the feature is enabled, even if
-there are temporarily no flow-sample Logs. Removing the last Log will not
-delete them. Decommissioning will remove only owned rows that are no longer
-referenced by other users. Neutron will not modify the host-local OVS exporter
-configuration.
+The application and collector rows will carry Neutron ownership metadata. They
+will remain deployment resources while the feature is enabled, even if there
+are temporarily no flow-sample Logs. Removing the last Log or disabling the
+option will not delete them. An operator removes them after disabling the
+option and confirming that no owned attachment remains. Neutron will not modify
+the host-local OVS exporter configuration.
 
-A selected stateful ``allow-related`` ACL will reference a Sample through
-both ``sample_new`` and ``sample_est``. Stateless allowing ACLs and drop ACLs
-will use ``sample_new``; they do not gain an established-connection event by
-setting ``event=ALL`` on a Log. Logs selecting the same ACL will share its
-sampling configuration. Sample creation and ACL attachment will occur in one
-Northbound transaction. Removing an attachment will allow OVSDB's
-strong-reference garbage collection to remove an otherwise unreferenced
-Sample.
+A selected stateful ``allow-related`` ACL will reference a Sample through both
+``sample_new`` and ``sample_est``. Stateless allowing ACLs and drop ACLs will
+use ``sample_new``. The Log ``event`` selects the ACL action, not the
+connection stage; established-stage samples exist only on stateful
+allow-related ACLs. Logs selecting the same ACL will share its sampling
+configuration. Sample creation and ACL attachment will occur in one Northbound
+transaction. Removing an attachment will allow OVSDB's strong-reference garbage
+collection to remove an otherwise unreferenced Sample.
 
 Sample has no ``external_ids`` column. Ownership therefore cannot be recorded
 on that row. Neutron will record attachment ownership and the expected
@@ -200,14 +201,14 @@ ACL selection and overlapping Logs
 ----------------------------------
 
 ``ACCEPT`` will select the SG's allowing ACLs. ``DROP`` will use the
-SG-specific drop ACLs that the OVN logging driver creates on a logged SG's
-Port Group since bug 2110087, and ``ALL`` will select both. Those ACLs sit
-between the SG allow ACLs and the shared ``neutron_pg_drop`` ACLs, so the
-drops of a logged SG are observed on its own ACL rather than on the global
-one. This proposal depends on that change and will not alter the priority
-or match of those ACLs. Their presence will depend on whether either output
-still requires them. A flow-sample-only request will not enable controller
-logging as a side effect of creating a drop ACL.
+SG-specific drop ACLs that the OVN logging driver creates on a logged SG's Port
+Group since bug 2110087, and ``ALL`` will select both. Those ACLs sit between
+the SG allow ACLs and the shared ``neutron_pg_drop`` ACLs, so the drops of a
+logged SG are observed on its own ACL rather than on the global one. This
+proposal depends on that change and will not alter the priority or match of
+those ACLs. Those drop ACLs will be present only while either output still
+requires them. A flow-sample-only request will not enable controller logging as
+a side effect of creating a drop ACL.
 
 A drop observation identifies the selected drop ACL. It does not identify an
 explicit SG deny rule, since security groups contain allow rules and an
@@ -224,44 +225,50 @@ present. Deleting B will detach sampling while preserving A's packet logging.
 With sampling Logs B and C, deleting B will leave sampling attached for C.
 An output will be removed only when no enabled Log requires it.
 
-The calculation will include the existing packet logging fields and the
-lifecycle of SG-specific drop ACLs. It cannot be implemented by independently
-clearing all logging fields when one Log is deleted: ACL labels are also
-used by the sampling path. Reconciliation will preserve packet logging's
-related-traffic behavior when sampling is added or removed.
+The calculation will cover the existing packet logging fields, the sampling
+references, and the SG-specific drop ACLs together. Deleting one Log cannot
+simply clear every logging field on the ACL: a nonzero label set by packet
+logging changes the observation point emitted by sampling. Reconciliation
+will preserve packet logging's related-traffic behavior when sampling is
+added or removed.
 
 Observation identity
 --------------------
 
 Sample metadata is a nonzero 32-bit identifier with a Northbound uniqueness
-constraint. Neutron will allocate one Sample for each SG and stage, shared
-by the Logs and ACLs of that SG, rather than one for each ACL or Log. It
-will allocate the value with collision detection and bounded retry, and
-reuse it while any owned attachment of that SG and stage remains. Repeated
-reconciliation and a neutron-server restart will not allocate new Samples
-for unchanged attachments. When ACLs of several logged SGs overlap on one
-port, the emitted identifier is that of whichever SG's ACL OVN applies.
-The identifier names the SG, not the Log, and it is not per-port
+constraint. Neutron will allocate one Sample for each SG, stage, and ACL
+action, rather than one for each ACL or Log: the allow-new, allow-established,
+and drop observations of one SG are distinct, and the Logs and ACLs of that SG
+share them. It will allocate the value with collision detection and bounded
+retry, and reuse it while any owned attachment of that SG, stage, and action
+remains. Repeated reconciliation and a neutron-server restart will not allocate
+new Samples for unchanged attachments. When ACLs of several logged SGs overlap
+on one port, the emitted identifier is that of whichever SG's ACL OVN applies.
+The identifier names the SG and action, not the Log, and it is not per-port
 attribution.
 
 A nonzero ACL label can take precedence over Sample metadata as the emitted
 observation point. Existing packet logging uses that label, so this feature
-will not clear it to make sampling work. The supported dataplane combinations
-must preserve sampling when packet logging and sampling coexist, including
-with a single collector and register-based sampling.
+will not clear it to make sampling work. Instead, when packet logging needs a
+nonzero label on an ACL that also carries sampling, Neutron will set that label
+to the ACL's new-stage Sample metadata, so the emitted value stays the same.
+The supported dataplane combinations must preserve sampling when packet logging
+and sampling coexist, including with a single collector and register-based
+sampling.
 
-The observation domain also contains a logical datapath identifier. Depending
-on the OVN path and the presence of an ACL label, its application portion may
-distinguish new and established observations or be zero. Consumers cannot
-assume that application IDs always separate these stages. Operators will need
-the applicable OVN mapping to interpret exported identifiers.
+The observation domain ID also contains a logical datapath identifier.
+Depending on the OVN path and the presence of an ACL label, its application
+portion may distinguish new and established observations or be zero. Consumers
+cannot assume that application IDs always separate these stages. Operators will
+need the applicable OVN mapping to interpret exported identifiers.
 
-These identifiers are not Log UUIDs or permanent SG-rule identifiers. Adding
-or removing packet logging can change the effective observation point through
-the ACL label. Replacing an ACL or restoring a Northbound database can also
-change the mapping. Established connections can retain earlier conntrack
-metadata across a configuration change. The feature does not promise an
-instantaneous remapping of every existing connection or retroactive samples.
+These identifiers are not Log UUIDs or permanent SG-rule identifiers. Adding or
+removing packet logging keeps the emitted value but can change whether the
+observation domain distinguishes the stage. Replacing an ACL or restoring a
+Northbound database can also change the mapping. Established connections can
+retain earlier conntrack metadata across a configuration change. The feature
+does not promise an instantaneous remapping of every existing connection or
+retroactive samples.
 
 Lifecycle and recovery
 ----------------------
@@ -305,13 +312,13 @@ the initial rolling upgrade. Configuration must agree across workers before
 the feature is advertised.
 
 Disabling the deployment option will reject new flow-sample requests and
-enable operations. Existing Logs will remain available for read, disable, and
-delete. When Northbound is reachable with the required schema, reconciliation
-will detach owned sampling references while retaining stored Log intent.
-Re-enabling the option will apply enabled Logs again. If Northbound is
-unreachable, disabling the option cannot guarantee immediate cessation of
-sampling. Before a downgrade, operators must disable the feature and verify
-that attachments have been removed.
+attempts to enable existing flow-sample Logs. Existing Logs will remain
+available for read, disable, and delete. When Northbound is reachable with the
+required schema, reconciliation will detach owned sampling references while
+retaining stored Log intent. Re-enabling the option will apply enabled Logs
+again. If Northbound is unreachable, disabling the option cannot guarantee
+immediate cessation of sampling. Before a downgrade, operators must disable the
+feature and verify that attachments have been removed.
 
 Alternatives
 ------------
@@ -359,8 +366,8 @@ The implementation consists of:
 * Maintenance and database synchronization support for restoring sampling.
 
 Any ovsdbapp command needed for conditional attachment management will include
-transaction tests. Dataplane compatibility, particularly ACL-label coexistence,
-must be established before advertising the feature.
+transaction tests. The operator must establish dataplane compatibility,
+particularly ACL-label coexistence, before advertising the feature.
 
 The existing ``openstack network log`` commands are provided by the
 python-neutronclient OSC plugin. Create will gain ``--output-type``; show,
