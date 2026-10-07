@@ -33,6 +33,36 @@ controller logging을 유지하며, 어느 요청이든 Network Log API로 제�
 집계 주기, 저장 서비스를 정의하지 않는다. 샘플은 패킷을 관찰한 결과이며, 완전한
 연결 기록이나 정확한 패킷·바이트 카운터가 아니다.
 
+다음 도식은 두 출력 경로와 책임 경계를 보여 준다. 영문 spec에는 없는 번역본
+보조 자료다.
+
+```mermaid
+flowchart LR
+    subgraph neutron["Neutron (이 제안의 범위)"]
+        LOG["Network Log<br/>output_type = packet_log | flow_sample"]
+        DRV["OVN logging driver"]
+        LOG --> DRV
+    end
+    subgraph nb["OVN Northbound"]
+        ACL["SG ACL"]
+        SMP["Sample<br/>(metadata, collectors)"]
+        SC["Sample_Collector<br/>(id, set_id, probability)"]
+        SA["Sampling_App<br/>acl-new / acl-est"]
+    end
+    subgraph host["Chassis (운영자 구성)"]
+        CTRL["ovn-controller<br/>ACL log + meter"]
+        OVS["OVS sample action<br/>Flow_Sample_Collector_Set"]
+        IPFIX["IPFIX exporter"]
+    end
+    COLL["외부 collector / 집계 / 저장<br/>(운영자 책임)"]
+    DRV -- "packet_log: log, meter, name, label" --> ACL
+    DRV -- "flow_sample: sample_new / sample_est" --> ACL
+    DRV --> SMP --> SC
+    DRV --> SA
+    ACL -. "packet_log" .-> CTRL
+    ACL -. "flow_sample" .-> OVS --> IPFIX --> COLL
+```
+
 ## 제안하는 변경 (Proposed Change)
 
 ### Network Log API
@@ -180,6 +210,29 @@ Neutron은 ACL에 연결 소유권과 예상 참조를 기록한다. 참조된 S
 그대로 둔다. 검사와 갱신은 같은 IDL 트랜잭션에서 수행하고, 동시 변경이 발생하면
 재시도해야 한다.
 
+NB 객체 관계와 소유권 기록 위치는 다음과 같다. Sample에는 `external_ids`가
+없으므로 소유권은 ACL 쪽에 기록한다.
+
+```mermaid
+flowchart TB
+    APPN["Sampling_App type=acl-new<br/>Neutron 소유, NB에 type당 하나"]
+    APPE["Sampling_App type=acl-est<br/>Neutron 소유, NB에 type당 하나"]
+    SC["Sample_Collector<br/>id, set_id, probability<br/>Neutron 소유 (external_ids)"]
+    SN["Sample (new)<br/>metadata = SG·stage 식별자<br/>external_ids 없음"]
+    SE["Sample (est)<br/>metadata = SG·stage 식별자<br/>external_ids 없음"]
+    ACL1["SG ACL allow-related<br/>sample_new, sample_est<br/>external_ids: 소유권·기대 참조"]
+    ACL2["SG ACL allow-stateless / drop<br/>sample_new만"]
+    FSCS["OVS Flow_Sample_Collector_Set<br/>id = set_id (운영자 구성)"]
+    ACL1 --> SN
+    ACL1 --> SE
+    ACL2 --> SN
+    SN --> SC
+    SE --> SC
+    SC -. "set_id로 연결" .-> FSCS
+    APPN -. "obs_domain의 app 부분" .-> SN
+    APPE -. "obs_domain의 app 부분" .-> SE
+```
+
 ### ACL 선택과 중복 Log (ACL selection and overlapping Logs)
 
 `ACCEPT`는 SG의 허용 ACL을 선택한다. `DROP`은 bug 2110087 이후 OVN logging
@@ -198,11 +251,55 @@ Drop 관찰 결과는 선택된 drop ACL을 식별한다. Security group에는 �
 한 포트에 적용되는 서로 다른 SG의 Log 대상 drop ACL은 같은 priority를 쓰며,
 OVN은 그중 어느 것이 적용되는지 정의하지 않는다. 허용 ACL도 마찬가지다.
 
+포트 하나에 적용되는 ACL의 priority 계층은 다음과 같다. Log 대상 SG별 drop ACL은
+bug 2110087이 추가한 것이며, 같은 priority의 ACL 중 어느 것이 적용되는지는 OVN이
+정의하지 않는다.
+
+```mermaid
+flowchart TB
+    subgraph p1002["priority 1002 — SG 허용 ACL (SG마다)"]
+        A1["SG A allow"]
+        B1["SG B allow"]
+    end
+    subgraph p1001["priority 1001 — Log 대상 SG별 drop ACL (bug 2110087)"]
+        A2["SG A drop + log/sample"]
+        B2["SG B drop + log/sample"]
+    end
+    subgraph p1000["priority 1000 — 공용 neutron_pg_drop"]
+        G["모든 포트 drop (조용한 안전망)"]
+    end
+    PKT["포트 P (SG A, SG B 소속)의 패킷"] --> p1002
+    p1002 -- "어느 허용 ACL에도 불일치" --> p1001
+    p1001 -- "Log 대상 SG 없음" --> p1000
+    A2 -. "둘 다 일치하면<br/>적용 ACL은 undefined" .- B2
+```
+
 Driver는 각 ACL에 대해 출력 방식별로 활성화된 Log의 합집합을 계산한다. Packet
 Log A와 sampling Log B가 있으면 두 출력이 모두 존재한다. B를 삭제하면 sampling
 연결을 제거하고 A의 packet logging은 유지한다. Sampling Log B와 C가 있을 때
 B를 삭제하면 C를 위해 sampling 연결을 유지한다. 해당 출력을 필요로 하는 활성
 Log가 더 이상 없을 때만 출력을 제거한다.
+
+출력별 합집합 계산의 예는 다음과 같다. ACL 하나에 두 출력이 독립적으로 붙고,
+각 출력은 그것을 요구하는 활성 Log가 없어질 때만 제거된다.
+
+```mermaid
+flowchart LR
+    LA["Log A<br/>packet_log, enabled"]
+    LB["Log B<br/>flow_sample, enabled"]
+    LC["Log C<br/>flow_sample, enabled"]
+    subgraph acl["같은 SG ACL"]
+        PL["packet 출력<br/>log=true, meter, name, label"]
+        FS["sample 출력<br/>sample_new / sample_est → SG Sample"]
+    end
+    LA --> PL
+    LB --> FS
+    LC --> FS
+    NOTE1["B 삭제 → C가 남아 sample 출력 유지"]
+    NOTE2["B·C 모두 삭제 → sample 출력만 분리, A의 packet 출력 유지"]
+    FS -.-> NOTE1
+    FS -.-> NOTE2
+```
 
 이 계산에는 기존 packet logging 필드와 SG별 drop ACL의 생명주기도 포함한다.
 Log 하나를 삭제할 때 모든 logging 필드를 독립적으로 지우는 방식으로 구현할 수는
@@ -265,6 +362,36 @@ logging drop ACL도 명시적으로 reconcile해야 한다. 현재의 rule-ACL �
 이 ACL들을 다시 만들지 않기 때문이다. 요청 상태가 같다면 어느 복구 경로를
 반복하더라도 연결과 metadata 값을 유지해야 한다.
 
+요청 상태(SQL)와 NB 상태가 별도 트랜잭션이라는 점과 세 가지 복구 경로를 도식으로
+나타내면 다음과 같다.
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant API as neutron-server (Log plugin)
+    participant SQL as SQL (Log 요청 상태)
+    participant DRV as OVN logging driver
+    participant NB as OVN Northbound
+    participant MT as maintenance / DB sync
+    C->>API: POST log (flow_sample)
+    API->>SQL: Log 저장 (precommit 검증 포함)
+    API->>DRV: postcommit create_log
+    DRV->>NB: 조건부 트랜잭션: Sample 생성 + ACL 참조 부착
+    alt NB 트랜잭션 실패
+        NB-->>DRV: 오류
+        DRV-->>API: driver 오류 (SQL Log는 남음)
+        API-->>C: 오류 응답, list/show로 상태 확인 가능
+    else 성공
+        API-->>C: 201 Created
+    end
+    Note over DRV,NB: SG rule 생성·교체, statefulness 변경 시<br/>같은 출력 상태 계산으로 재적용
+    loop 주기 작업 (maintenance lock)
+        MT->>SQL: 활성 Log 읽기
+        MT->>NB: Neutron 소유 참조 검사, 잔존 참조 정리, 누락 참조 복원
+    end
+    Note over MT,NB: DB sync는 재생성된 SG-rule ACL과<br/>SG별 drop ACL에 sampling을 복원
+```
+
 ### 업그레이드와 비활성화 (Upgrade and disable)
 
 운영자는 관련된 모든 API worker와 service가 새 Log object와 출력 필드를 이해한
@@ -279,6 +406,28 @@ Log의 조회·비활성화·삭제는 계속 가능하다. 필요한 스키마�
 적용한다. Northbound에 접근할 수 없다면 옵션을 비활성화해도 sampling의 즉각적인
 중단을 보장할 수 없다. Downgrade 전에 운영자는 기능을 비활성화하고 연결이
 제거되었는지 확인해야 한다.
+
+배포 옵션 상태에 따른 동작은 다음과 같다.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Off: 업그레이드 직후 (기본값)
+    Off --> On: 모든 worker가 새 Log object를 이해한 뒤 opt-in
+    On --> Off: 옵션 비활성화
+    state Off {
+        [*] --> OffBehavior
+        OffBehavior: flow_sample 생성·enable 거부
+        OffBehavior: 기존 Log 조회·disable·delete 가능
+        OffBehavior: NB 도달 시 소유 참조 분리, SQL 요청 상태 보존
+        OffBehavior: NB 미도달 시 즉시 중단 보장 없음
+    }
+    state On {
+        [*] --> OnBehavior
+        OnBehavior: capability에 flow_sample 광고
+        OnBehavior: enabled Log 재적용
+    }
+    Off --> Downgrade: 참조 분리 확인 후
+```
 
 ### 대안 (Alternatives)
 
