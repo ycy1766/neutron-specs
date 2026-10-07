@@ -84,16 +84,27 @@ would interpret it as a request for packet logging.
 Initial scope and policy
 ------------------------
 
-An OVN security-group ACL applies to a Port Group. Looking up the security
-groups attached to a target port does not restrict those ACLs to that port.
-A shared security group can also contain ports from several projects.
+A Log selects traffic with two optional fields: ``resource_id`` names a
+security group and ``target_id`` names a port. The ML2/OVN driver uses
+them only to choose Port Groups. With ``resource_id`` it selects that
+security group's Port Group and ignores ``target_id``. With ``target_id``
+alone it looks up the security groups attached to that port and selects
+each of their Port Groups. With neither it selects every Port Group in
+the Northbound database. In every case the selected ACLs belong to a
+Port Group and apply to all of its member ports, not only to the port
+named by ``target_id``. A shared security group can also contain ports
+from several projects.
 
-For ``flow_sample``, the request will require ``resource_type=security_group``
-and an explicit ``resource_id``. A non-null ``target_id`` or an omitted
-``resource_id`` will be rejected with HTTP 400. Sampling will cover the
-security group's Port Group, including ports subsequently attached to it.
-This proposal does not add per-port ACL copies or change the shared
-default-drop architecture to implement a narrower selector.
+For ``flow_sample``, the request will require
+``resource_type=security_group`` and an explicit ``resource_id``. A
+non-null ``target_id`` will be rejected with HTTP 400, because accepting
+it would suggest that only that port is sampled while the selected ACLs
+sample every port in the security group. An omitted ``resource_id`` will
+also be rejected, because it would attach sampling to every Port Group.
+Sampling will cover the security group's Port Group, including ports
+subsequently attached to it. This proposal does not add per-port ACL
+copies or change the shared default-drop architecture to implement a
+narrower selector.
 
 The existing Network Log policy permits administrators and project managers.
 The new output will additionally require an administrative policy check on

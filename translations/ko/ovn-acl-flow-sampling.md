@@ -109,15 +109,23 @@ POST /v2.0/log/logs
 
 ### 초기 범위와 정책 (Initial scope and policy)
 
-OVN security-group ACL은 Port Group에 적용된다. 대상 포트에 연결된 security group을
-조회하는 것만으로 해당 ACL의 적용 범위가 그 포트로 제한되지는 않는다. 공유 security
-group에는 여러 프로젝트의 포트가 포함될 수도 있다.
+Log는 선택 필드 두 개로 트래픽을 고른다. `resource_id`는 security group을,
+`target_id`는 포트를 가리킨다. ML2/OVN 드라이버는 이 두 필드를 Port Group을
+고르는 용도로만 쓴다. `resource_id`가 있으면 그 security group의 Port Group을
+고르고 `target_id`는 무시한다. `target_id`만 있으면 그 포트에 연결된 security
+group들을 조회해 각 group의 Port Group을 고른다. 둘 다 없으면 Northbound
+데이터베이스의 모든 Port Group을 고른다. 어느 경우든 선택된 ACL은 Port Group에
+속하므로 그 group의 모든 멤버 포트에 적용되며, `target_id`로 지정한 포트에만
+적용되지 않는다. 공유 security group에는 여러 프로젝트의 포트가 포함될 수도 있다.
 
 `flow_sample` 요청에는 `resource_type=security_group`과 명시적인 `resource_id`가
-필요하다. `target_id`가 null이 아니거나 `resource_id`를 생략한 요청은 HTTP 400으로
-거부한다. Sampling은 security group의 Port Group 전체를 대상으로 하며, 나중에
-연결되는 포트도 포함한다. 더 좁은 선택 범위를 구현하기 위해 포트별 ACL 복사본을
-추가하거나 공유 default-drop 구조를 변경하지 않는다.
+필요하다. `target_id`가 null이 아닌 요청은 HTTP 400으로 거부한다. 이를 허용하면
+그 포트만 sampling되는 것처럼 보이지만, 실제로는 선택된 ACL이 security group의
+모든 포트를 sampling하기 때문이다. `resource_id`를 생략한 요청도 거부한다. 모든
+Port Group에 sampling이 연결되기 때문이다. Sampling은 security group의 Port
+Group 전체를 대상으로 하며, 나중에 연결되는 포트도 포함한다. 더 좁은 선택 범위를
+구현하기 위해 포트별 ACL 복사본을 추가하거나 공유 default-drop 구조를 변경하지
+않는다.
 
 기존 Network Log 정책은 administrator와 project manager를 허용한다. 새 출력
 방식은 flow-sample Log 생성과 재활성화 시 관리자 권한 정책 검사를 추가로 요구한다.
