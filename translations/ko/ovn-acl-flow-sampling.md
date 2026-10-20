@@ -426,8 +426,8 @@ sequenceDiagram
 운영자는 관련된 모든 API worker와 service가 새 Log object와 출력 필드를 이해한
 뒤에 flow sampling을 활성화한다. 기본 비활성화 설정은 초기 rolling upgrade
 중에 이전 worker가 flow-sample 요청 상태를 접하지 않도록 한다. 기능 지원을
-알리기 전에 worker 간 설정이 일치해야 한다. OVN 데이터베이스 동기화 도구가 이
-변경 이전에 만들어진 Port Group에 project ID를 추가한다.
+알리기 전에 worker 간 설정이 일치해야 한다. 1회성 maintenance 작업이 이 변경
+이전에 만들어진 Port Group에 project ID를 추가한다.
 
 배포 옵션을 비활성화하면 새로운 flow-sample 요청과 기존
 flow-sample Log의 활성화 시도를 거부한다. 기존

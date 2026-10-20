@@ -333,8 +333,8 @@ Operators will enable flow sampling after all relevant API workers and
 services understand the new Log object and output field. The default-off
 setting prevents older workers from encountering flow-sample intent during
 the initial rolling upgrade. Configuration must agree across workers before
-the feature is advertised. The OVN database synchronization tool will add the
-project ID to Port Groups created before this change.
+the feature is advertised. A one-time maintenance task will add the project
+ID to the Port Groups created before this change.
 
 Disabling the deployment option will reject new flow-sample requests and
 attempts to enable existing flow-sample Logs. Existing Logs will remain
