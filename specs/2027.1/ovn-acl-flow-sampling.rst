@@ -208,6 +208,16 @@ differs from the ownership record, Neutron will report a conflict and leave
 it unchanged. Checks and updates must be in the same IDL transaction, with
 retry on concurrent changes.
 
+The Port Group of a security group will carry the project ID of the security
+group in its ``external_ids``, as Logical Switch Ports already do. This is the
+owner of the SG; for a shared SG it can differ from the projects of the member
+ports. While the SG has owned attachments, the Port Group will also carry the
+Sample metadata of each stage and action attached for that SG, and Neutron
+will remove those keys with the last attachment. An external consumer can
+then map an emitted observation point to the security group and its project
+from the Northbound database alone. These keys are an index for consumers;
+the ownership record on the ACL remains the reference that Neutron validates.
+
 ACL selection and overlapping Logs
 ----------------------------------
 
@@ -253,10 +263,11 @@ and drop observations of one SG are distinct, and the Logs and ACLs of that SG
 share them. It will allocate the value with collision detection and bounded
 retry, and reuse it while any owned attachment of that SG, stage, and action
 remains. Repeated reconciliation and a neutron-server restart will not allocate
-new Samples for unchanged attachments. When ACLs of several logged SGs overlap
-on one port, the emitted identifier is that of whichever SG's ACL OVN applies.
-The identifier names the SG and action, not the Log, and it is not per-port
-attribution.
+new Samples for unchanged attachments. The allocated values are also recorded
+on the SG's Port Group, as described above. When ACLs of several logged SGs
+overlap on one port, the emitted identifier is that of whichever SG's ACL OVN
+applies. The identifier names the SG and action, not the Log, and it is not
+per-port attribution.
 
 A nonzero ACL label can take precedence over Sample metadata as the emitted
 observation point. Existing packet logging uses that label, so this feature
@@ -298,10 +309,11 @@ will determine the traffic observed by an existing shared ACL.
 
 A periodic task under the OVN maintenance lock will reconcile SQL intent with
 owned Northbound state. It will inspect enabled Logs and stale attachments
-left by disabled or deleted Logs. Looking only for existing SQL rows would
-miss failed cleanup after deletion. Log resources are not already covered
-by OVN's resource-revision maintenance, so this reconciliation must be added
-explicitly.
+left by disabled or deleted Logs, and repair the Port Group keys described
+above when they differ from the owned attachments. Looking only for existing
+SQL rows would miss failed cleanup after deletion. Log resources are not
+already covered by OVN's resource-revision maintenance, so this reconciliation
+must be added explicitly.
 
 After a conflict or concurrent change, reconciliation will reread the current
 Logs before retrying conditional Northbound updates. It will also reevaluate
@@ -321,7 +333,8 @@ Operators will enable flow sampling after all relevant API workers and
 services understand the new Log object and output field. The default-off
 setting prevents older workers from encountering flow-sample intent during
 the initial rolling upgrade. Configuration must agree across workers before
-the feature is advertised.
+the feature is advertised. The OVN database synchronization tool will add the
+project ID to Port Groups created before this change.
 
 Disabling the deployment option will reject new flow-sample requests and
 attempts to enable existing flow-sample Logs. Existing Logs will remain
@@ -375,7 +388,8 @@ The implementation consists of:
 * The neutron-lib API extension and Log database and object changes.
 * Output validation and dispatch in the logging service.
 * Sampling resource and ACL attachment management in the OVN logging driver.
-* Maintenance and database synchronization support for restoring sampling.
+* Maintenance and database synchronization support for restoring sampling
+  and the Port Group keys.
 
 Any ovsdbapp command needed for conditional attachment management will include
 transaction tests. The operator must establish dataplane compatibility,

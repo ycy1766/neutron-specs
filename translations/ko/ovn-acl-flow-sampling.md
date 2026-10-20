@@ -220,6 +220,15 @@ Neutron은 ACL에 연결 소유권과 예상 참조를 기록한다. 참조된 S
 그대로 둔다. 검사와 갱신은 같은 IDL 트랜잭션에서 수행하고, 동시 변경이 발생하면
 재시도해야 한다.
 
+Security group의 Port Group은 Logical Switch Port가 이미 그렇듯 `external_ids`에
+그 security group의 project ID를 기록한다. 이 값은 SG의 소유자이며, 공유 SG라면
+소속 포트들의 project와 다를 수 있다. 그 SG에 소유 연결이 남아 있는 동안 Port
+Group은 그 SG에 연결된 단계·action별 Sample metadata도 함께 기록하고, Neutron은
+마지막 연결이 제거될 때 이 키들을 지운다. 외부 소비자는 이를 통해 Northbound
+데이터베이스만으로 내보내진 observation point를 security group과 그 project에
+대응시킬 수 있다. 이 키들은 소비자용 인덱스이며, Neutron이 검증하는 참조는
+여전히 ACL의 소유권 기록이다.
+
 NB 객체 관계와 소유권 기록 위치는 다음과 같다. Sample에는 `external_ids`가
 없으므로 소유권은 ACL 쪽에 기록한다.
 
@@ -232,7 +241,10 @@ flowchart TB
     SE["Sample (allow-est)<br/>metadata = SG·stage·action 식별자<br/>external_ids 없음"]
     ACL1["SG ACL allow-related<br/>sample_new, sample_est<br/>external_ids: 소유권·기대 참조"]
     ACL2["SG ACL allow-stateless / drop<br/>sample_new만"]
+    PG["SG Port Group<br/>external_ids: project_id,<br/>단계·action별 Sample metadata (소비자용 인덱스)"]
     FSCS["OVS Flow_Sample_Collector_Set<br/>id = set_id (운영자 구성)"]
+    PG --> ACL1
+    PG --> ACL2
     ACL1 --> SN
     ACL1 --> SE
     ACL2 --> SN
@@ -324,7 +336,8 @@ Neutron은 ACL이나 Log마다 Sample을 두는 대신 SG, 단계, ACL action마
 그 SG의 Log와 ACL은 이를 공유한다. 값은 충돌 검사와 제한된 횟수의
 재시도를 통해 할당하고, 해당 SG, 단계, action의 소유 연결이 하나라도 남아 있는 동안
 재사용한다. Reconciliation을 반복하거나 neutron-server를 재시작해도 변경되지
-않은 연결에 대해 새 Sample을 할당하지 않는다. 한 포트에서 여러 Log 대상 SG의
+않은 연결에 대해 새 Sample을 할당하지 않는다. 할당된 값은 앞서 설명한 대로 그
+SG의 Port Group에도 기록한다. 한 포트에서 여러 Log 대상 SG의
 ACL이 겹치면 OVN이 적용한 ACL이 속한 SG의 식별자가 내보내진다. 이 식별자는
 Log가 아니라 SG와 action을 가리키며 포트 단위 귀속도 아니다.
 
@@ -364,7 +377,8 @@ Log 작업과 SG ACL 생성은 같은 출력 상태 계산을 사용한다. Driv
 
 OVN maintenance lock 아래에서 실행하는 주기 작업이 SQL에 기록된 요청 상태와
 Neutron 소유의 Northbound 상태를 일치시킨다. 활성 Log와 함께 비활성화·삭제된
-Log가 남긴 오래된 연결도 검사한다. 현재 존재하는 SQL row만 찾으면 삭제 후 정리
+Log가 남긴 오래된 연결도 검사하고, 앞서 설명한 Port Group 키가 소유 연결과 다르면
+바로잡는다. 현재 존재하는 SQL row만 찾으면 삭제 후 정리
 실패를 놓치게 된다. Log 리소스는 기존 OVN resource-revision maintenance 대상이
 아니므로 이 reconciliation을 명시적으로 추가해야 한다.
 
@@ -412,7 +426,8 @@ sequenceDiagram
 운영자는 관련된 모든 API worker와 service가 새 Log object와 출력 필드를 이해한
 뒤에 flow sampling을 활성화한다. 기본 비활성화 설정은 초기 rolling upgrade
 중에 이전 worker가 flow-sample 요청 상태를 접하지 않도록 한다. 기능 지원을
-알리기 전에 worker 간 설정이 일치해야 한다.
+알리기 전에 worker 간 설정이 일치해야 한다. OVN 데이터베이스 동기화 도구가 이
+변경 이전에 만들어진 Port Group에 project ID를 추가한다.
 
 배포 옵션을 비활성화하면 새로운 flow-sample 요청과 기존
 flow-sample Log의 활성화 시도를 거부한다. 기존
@@ -480,7 +495,7 @@ Project manager가 자기 프로젝트의 공유되지 않은 SG에 sampling을 
 - neutron-lib API extension과 Log 데이터베이스 및 object 변경.
 - Logging service의 출력 검증과 dispatch.
 - OVN logging driver의 sampling 리소스 및 ACL 연결 관리.
-- Sampling을 복원하는 maintenance와 데이터베이스 동기화 지원.
+- Sampling과 Port Group 키를 복원하는 maintenance와 데이터베이스 동기화 지원.
 
 조건부 연결 관리에 필요한 ovsdbapp command에는 트랜잭션 테스트를 포함한다.
 운영자는 기능 지원을 알리기 전에 dataplane 호환성, 특히 ACL label 공존을 확인해야
