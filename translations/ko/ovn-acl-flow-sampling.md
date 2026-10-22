@@ -75,7 +75,10 @@ flowchart LR
 항목을 찾는 필터를 지원하며, 생성 후에는 변경할 수 없다. 출력 방식을 바꾸려면
 새 Log를 만들고 기존 Log를 제거해야 한다. 기존 `enabled` 속성은 두 출력 방식
 모두에 적용된다. 하나의 Log는 출력 방식 하나를 선택한다. 같은 security group에
-두 출력을 모두 요청하려면 별도의 Log를 사용한다.
+활성화된 `packet_log`와 `flow_sample` Log를 함께 사용하는 구성은 지원하지 않는다.
+API는 이 조합을 거부하지 않으므로 운영자가 SG별로 한 출력 방식만 활성화해야 한다.
+출력을 전환할 때는 기존 Log를 비활성화하거나 삭제한 뒤 새 Log를 활성화한다.
+동일 출력 방식의 Log를 여러 개 사용하는 구성은 계속 지원한다.
 
 예를 들어 운영자는 다음과 같이 sampling을 요청할 수 있다. 예제의 resource UUID는
 이미 존재하는 security group을 가리킨다.
@@ -158,8 +161,8 @@ loggable-resources 응답은 리소스 유형별 지원 출력 방식을 설명�
 
 Sampling은 기본적으로 비활성화한다. `flow_sample`을 지원한다고 알리려면 운영자의
 명시적인 활성화, OVN logging driver, 필요한 Northbound sampling 테이블과 ACL
-컬럼 지원이 있어야 한다. 또한 참여하는 모든 chassis에서 필요한 sampling 및
-ACL-label 동작을 지원하는 OVN/OVS 조합을 사용해야 한다. 스키마 검사만으로는 이
+컬럼 지원이 있어야 한다. 또한 참여하는 모든 chassis에서 대상 SG의 packet logging을
+비활성화한 상태로 ACL sampling을 지원하는 OVN/OVS 조합을 사용해야 한다. 스키마 검사만으로는 이
 dataplane 호환성을 확인할 수 없다.
 
 초기 구현은 OVN 이외의 logging driver가 함께 로드되어 있으면 flow sampling을
@@ -297,13 +300,13 @@ flowchart TB
 ```
 
 Driver는 각 ACL에 대해 출력 방식별로 활성화된 Log의 합집합을 계산한다. Packet
-Log A와 sampling Log B가 있으면 두 출력이 모두 존재한다. B를 삭제하면 sampling
-연결을 제거하고 A의 packet logging은 유지한다. Sampling Log B와 C가 있을 때
+logging과 sampling의 동시 전달을 보장하는 것은 아니다. Sampling Log B와 C가 있을 때
 B를 삭제하면 C를 위해 sampling 연결을 유지한다. 해당 출력을 필요로 하는 활성
 Log가 더 이상 없을 때만 출력을 제거한다.
 
-출력별 합집합 계산의 예는 다음과 같다. ACL 하나에 두 출력이 독립적으로 붙고,
-각 출력은 그것을 요구하는 활성 Log가 없어질 때만 제거된다.
+다음 그림은 운영자가 미지원 조합을 설정했을 때도 지켜야 할 제어면 정리 동작이다.
+두 출력의 동시 전달을 지원한다는 의미가 아니며, 각 출력은 그것을 요구하는 활성
+Log가 없어질 때만 제거된다.
 
 ```mermaid
 flowchart LR
@@ -343,12 +346,9 @@ Log가 아니라 SG와 action을 가리키며 포트 단위 귀속도 아니다.
 
 0이 아닌 ACL label은 내보내는 observation point를 결정할 때 Sample metadata보다
 우선할 수 있다. 기존 packet logging이 이 label을 사용하므로 sampling을 동작시키기
-위해 label을 지우지 않는다. 대신 sampling이 붙은 ACL에 packet logging이 0이 아닌
-label을 필요로 하면, Neutron은 그 label을 해당 ACL의 new 단계 Sample metadata
-값으로 설정해 내보내는 값이 같게 유지되도록 한다. label을 바꾸면 이전 값으로
-commit된 연결의 related-traffic 로깅은 그 연결이 끝날 때까지 영향을 받는다. 지원하는 dataplane 조합은 단일 collector와 register
-기반 sampling을 사용하는 경우를 포함해 packet logging과 sampling이 공존할 때도
-sampling을 유지해야 한다.
+위해 label을 지우지 않는다. 같은 SG에서 두 출력 방식을 동시에 사용하는 구성은
+지원 범위 밖이다. 이 구성에서 label을 방어적으로 처리하는 코드는 dataplane
+호환성이나 sample 전달을 보장하지 않는다.
 
 Observation domain ID에는 logical datapath 식별자도 포함된다. OVN 처리 경로와
 ACL label 유무에 따라 domain의 application 부분은 new와 established 관찰을
@@ -356,9 +356,8 @@ ACL label 유무에 따라 domain의 application 부분은 new와 established �
 구분한다고 가정할 수 없다. 운영자는 내보낸 식별자를 해석하기 위해 해당 OVN의
 매핑 정보가 필요하다.
 
-이 식별자들은 Log UUID나 영구적인 SG-rule 식별자가 아니다. Packet logging을
-추가하거나 제거해도 내보내는 값은 유지되지만, observation domain이 단계를
-구분하는지는 바뀔 수 있다.
+이 식별자들은 Log UUID나 영구적인 SG-rule 식별자가 아니다. 출력 방식을 전환하면
+관찰 식별자가 바뀔 수 있다.
 ACL 교체나 Northbound 데이터베이스 복원도 매핑을 바꿀 수 있다. 기존 연결은 설정이
 변경된 뒤에도 이전 conntrack metadata를 유지할 수 있다. 이 기능은 모든 기존
 연결의 즉각적인 재매핑이나 과거 트래픽의 소급 sampling을 보장하지 않는다.
@@ -498,8 +497,8 @@ Project manager가 자기 프로젝트의 공유되지 않은 SG에 sampling을 
 - Sampling과 Port Group 키를 복원하는 maintenance와 데이터베이스 동기화 지원.
 
 조건부 연결 관리에 필요한 ovsdbapp command에는 트랜잭션 테스트를 포함한다.
-운영자는 기능 지원을 알리기 전에 dataplane 호환성, 특히 ACL label 공존을 확인해야
-한다.
+운영자는 기능 지원을 알리기 전에 대상 SG의 packet logging을 비활성화한 상태에서
+dataplane 호환성을 확인해야 한다.
 
 기존 `openstack network log` 명령은 python-neutronclient OSC plugin이 제공한다.
 Create에 `--output-type`을 추가하고 show, list, loggable-resources 출력에 새
@@ -513,17 +512,19 @@ API와 object 테스트는 출력 생략, 잘못된 값, 변경 불가 속성, �
 RPC 경로로 전달되지 않는지 확인한다.
 
 OVN 기능 테스트는 Neutron 및 외부 소유의 전역 row, 식별자 충돌, 외부 ACL 참조,
-공유 연결, 한 SG와 action의 Log와 ACL이 공유하는 Sample, 두 출력의 삭제 순서를 모두
-다룬다. Flow-sample 전용 SG drop ACL이
+공유 연결, 한 SG와 action의 Log와 ACL이 공유하는 Sample, 미지원 혼합 구성에서 두
+출력의 삭제 순서를 다룬다. 삭제 순서 테스트는 남은 설정의 보존과 정리를 확인하며,
+두 출력의 동시 전달을 검증하지 않는다. Flow-sample 전용 SG drop ACL이
 controller logging을 활성화하지 않는지도 확인한다. 복구 테스트는 postcommit
 실패, 동시 Log 변경, 재시작, ACL 교체, 데이터베이스 동기화, Northbound에 접근할
 수 없을 때의 비활성화를 다룬다.
 
 Dataplane 테스트는 new, established, reply 트래픽, stateless 규칙, DROP,
-양쪽 ACL 방향을 다룬다. 단일 collector에서 0이 아닌 label을 사용하는 경우,
-sampling 전후에 packet logging을 설정하는 경우, 출력 변경 전부터 존재하던 연결,
-Log 대상 SG 두 개에 속한 포트를 반드시 포함한다. 기대 결과에는 설정한 exporter로 샘플이 도달하는 것뿐 아니라
-패킷 필터링과 packet-log 동작이 그대로 유지되는 것도 포함한다. 별도의 전달
+양쪽 ACL 방향을 대상 SG의 packet logging을 비활성화한 상태에서 다룬다. 단일
+collector, 이전 출력을 비활성화한 뒤 출력 전환, 출력 변경 전부터 존재하던 연결,
+sampling 대상 SG 두 개에 속한 포트를 포함한다. Packet logging은 별도로 검증한다.
+기대 결과는 패킷 필터링이 유지되고 sampling 활성화 중 exporter에 sample이 도달하는
+것이다. 같은 SG에서 두 출력이 동시에 전달되는 것은 합격 기준이 아니다. 별도의 전달
 테스트로 flow-based IPFIX 수신을 확인한다. Collector가 없어도 ACL의 허용·차단
 결정은 바뀌어서는 안 된다.
 
@@ -531,7 +532,9 @@ Log 대상 SG 두 개에 속한 포트를 반드시 포함한다. 기대 결과�
 
 API 문서는 출력 속성, 초기 selector와 정책 제한, 기능 지원 응답을 설명한다.
 Logging guide는 명시적 활성화 설정, 지원하는 OVN/OVS 조합, 소유권 충돌,
-운영자가 관리하는 exporter 구성, 비활성화와 downgrade 순서를 다룬다.
+운영자가 관리하는 exporter 구성, 동일 SG 혼합 출력의 미지원, 비활성화와 downgrade
+순서를 다룬다. API가 혼합 출력을 차단하지 않는다는 점과 기존 출력을 비활성화한 뒤
+새 출력을 활성화해야 한다는 점을 설명한다.
 샘플 식별자와 통계적 관찰 결과를 Log별 기록, 정확한 카운터, collector 전달 보장과
 구분해 설명한다.
 

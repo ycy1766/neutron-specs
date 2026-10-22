@@ -54,7 +54,12 @@ The attribute will be accepted on create and returned by show and list. It will
 support equality filtering and will not be mutable. A caller that needs a
 different output will create a replacement Log and remove the old one. The
 existing ``enabled`` attribute will control either output. A Log will select
-one output; separate Logs can request both outputs for the same security group.
+one output. Using enabled ``packet_log`` and ``flow_sample`` Logs concurrently
+on the same security group is not supported. The API will not reject this
+combination; operators must ensure that only one output type is enabled for
+a given security group. When changing outputs, disable or delete the old Log
+before enabling its replacement. Multiple Logs of the same output type remain
+supported.
 
 For example, an operator can request sampling as follows. The resource UUID
 in this example represents an existing security group::
@@ -138,7 +143,7 @@ sampling enabled it will include::
 Sampling will be disabled by default. Advertising ``flow_sample`` will require
 the operator's opt-in, the OVN logging driver, and support for the necessary
 Northbound sampling tables and ACL columns. The deployment must also use an
-OVN/OVS combination that supports the required sampling and ACL-label behavior
+OVN/OVS combination that supports ACL sampling with packet logging disabled
 on every participating chassis. Schema detection alone cannot establish this
 dataplane compatibility.
 
@@ -241,10 +246,12 @@ Logged drop ACLs of different SGs on one port share a priority, and OVN
 does not define which one is applied. The same holds for their allow ACLs.
 
 For each ACL, the driver will calculate the union of enabled Logs separately
-for each output. With packet Log A and sampling Log B, both outputs will be
-present. Deleting B will detach sampling while preserving A's packet logging.
-With sampling Logs B and C, deleting B will leave sampling attached for C.
-An output will be removed only when no enabled Log requires it.
+for each output. With sampling Logs B and C, deleting B will leave sampling
+attached for C. An output will be removed only when no enabled Log requires
+it. If operators configure both output types despite the restriction, deleting
+one must not remove the other output's configuration. This is a control-plane
+cleanup requirement, not a guarantee of simultaneous packet-log and sample
+delivery.
 
 The calculation will cover the existing packet logging fields, the sampling
 references, and the SG-specific drop ACLs together. Deleting one Log cannot
@@ -270,14 +277,11 @@ applies. The identifier names the SG and action, not the Log, and it is not
 per-port attribution.
 
 A nonzero ACL label can take precedence over Sample metadata as the emitted
-observation point. Existing packet logging uses that label, so this feature
-will not clear it to make sampling work. Instead, when packet logging needs a
-nonzero label on an ACL that also carries sampling, Neutron will set that label
-to the ACL's new-stage Sample metadata, so the emitted value stays the same.
-Changing a label affects related-traffic logging of connections committed under
-the previous value until they end. The supported dataplane combinations must
-preserve sampling when packet logging and sampling coexist, including with a
-single collector and register-based sampling.
+observation point. Existing packet logging uses that label; enabling sampling
+must not clear it to make sampling work. Concurrent use of the two output
+types on the same SG is outside the supported scope. Defensive handling of
+labels in that configuration does not establish dataplane compatibility or
+guarantee that samples will be exported.
 
 The observation domain ID also contains a logical datapath identifier.
 Depending on the OVN path and the presence of an ACL label, its application
@@ -285,10 +289,9 @@ portion may distinguish new and established observations or be zero. Consumers
 cannot assume that application IDs always separate these stages. Operators will
 need the applicable OVN mapping to interpret exported identifiers.
 
-These identifiers are not Log UUIDs or permanent SG-rule identifiers. Adding or
-removing packet logging keeps the emitted value but can change whether the
-observation domain distinguishes the stage. Replacing an ACL or restoring a
-Northbound database can also change the mapping. Established connections can
+These identifiers are not Log UUIDs or permanent SG-rule identifiers. Switching
+output types can change the observation identity. Replacing an ACL or restoring
+a Northbound database can also change the mapping. Established connections can
 retain earlier conntrack metadata across a configuration change. The feature
 does not promise an instantaneous remapping of every existing connection or
 retroactive samples.
@@ -392,8 +395,8 @@ The implementation consists of:
   and the Port Group keys.
 
 Any ovsdbapp command needed for conditional attachment management will include
-transaction tests. The operator must establish dataplane compatibility,
-particularly ACL-label coexistence, before advertising the feature.
+transaction tests. The operator must establish dataplane compatibility with
+packet logging disabled on the sampled SG before advertising the feature.
 
 The existing ``openstack network log`` commands are provided by the
 python-neutronclient OSC plugin. Create will gain ``--output-type``; show,
@@ -411,20 +414,26 @@ intent is not sent through packet-only drivers or their RPC paths.
 
 OVN functional tests will exercise owned and foreign global rows, identifier
 collisions, foreign ACL references, shared attachments, Samples shared by the
-Logs and ACLs of one SG and action, and both output deletion orders. They will
-verify that flow-sample-only SG drop ACLs do not enable controller logging.
+Logs and ACLs of one SG and action, and both output deletion orders in an
+unsupported mixed configuration. The latter tests check cleanup and
+preservation of the remaining configuration, not simultaneous dataplane
+delivery. They will verify that flow-sample-only SG drop ACLs do not enable
+controller logging.
 Recovery tests will cover postcommit failure, concurrent Log changes, restart,
 ACL replacement, database synchronization, and disable while Northbound is
 unavailable.
 
 Dataplane tests will cover new, established, and reply traffic, stateless
-rules, DROP, and both ACL directions. They must include nonzero labels with a
-single collector, packet logging before and after sampling, connections that
-predate an output change, and a port in two logged SGs. The expected result
-includes unchanged packet filtering and packet-log behavior as well as samples
-reaching the configured exporter. A separate delivery test will verify
-flow-based IPFIX reception; an absent collector must not alter the ACL's allow
-or drop decision.
+rules, DROP, and both ACL directions with packet logging disabled on the
+sampled SG. They will cover a single collector, switching output types after
+disabling the previous output, connections that predate an output change, and
+a port in two sampled SGs. Packet logging will be tested separately. The
+expected result includes unchanged packet filtering and samples reaching the
+configured exporter while sampling is enabled. Simultaneous delivery for both
+outputs on the same SG is not an acceptance criterion. A separate delivery
+test will verify flow-based IPFIX reception; an absent collector must not
+alter the ACL's
+allow or drop decision.
 
 
 Documentation Impact
@@ -433,7 +442,10 @@ Documentation Impact
 API documentation will describe the output attribute, initial selector and
 policy restrictions, and capability response. The logging guide will cover
 the opt-in configuration, supported OVN/OVS combinations, ownership conflicts,
-operator-managed exporter setup, and the disable and downgrade sequence.
+operator-managed exporter setup, the unsupported same-SG mixed-output
+configuration, and the disable and downgrade sequence. It will explain that
+the API does not enforce the mixed-output restriction and that an old output
+must be disabled before its replacement is enabled.
 It will distinguish sample identifiers and statistical observations from
 per-Log records, exact counters, and guaranteed collector delivery.
 
